@@ -396,7 +396,7 @@ export default function Home() {
                     <span className={`font-mono text-2xl font-black ${cfg.text} mb-1`}>
                       {tier} балів
                     </span>
-                    <p className="text-sm text-slate-600">Оберіть тип завдання зліва</p>
+                    <p className="text-sm text-slate-600">Оберіть тип завдання</p>
                   </div>
                 ) : (
                   TaskComp && (
