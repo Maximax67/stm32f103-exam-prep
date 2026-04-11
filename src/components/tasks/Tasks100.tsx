@@ -19,7 +19,15 @@ import {
 } from '@/lib/pinUtils';
 
 import CodeDisplay from '../CodeDisplay';
-import { Checkbox, FormGrid, InfoBadge, NumberInput, Select } from '../ui/FormInputs';
+import {
+  Checkbox,
+  FormGrid,
+  InfoBadge,
+  NoteBadge,
+  NumberInput,
+  Select,
+  WarningBadge,
+} from '../ui/FormInputs';
 
 // ─── PWM ──────────────────────────────────────────────────────────────────────
 
@@ -38,9 +46,10 @@ export function Task100PWM() {
   }, [clockMhz, psc, arr]);
 
   const code = generatePwm({ pin, dutyCyclePct: duty, psc, arr, clockMhz });
+  const isAdvancedTimer = mapping?.timer === 'TIM1';
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-4">
       <FormGrid>
         <Select
           label="PWM пін"
@@ -76,12 +85,27 @@ export function Task100PWM() {
         <NumberInput label="Duty Cycle (%)" value={duty} onChange={setDuty} min={0} max={100} />
       </FormGrid>
 
+      {isAdvancedTimer && (
+        <WarningBadge>
+          <strong>TIM1 — Advanced-Control Timer!</strong> На відміну від TIM2–TIM5, TIM1 вимагає
+          додаткового кроку: <strong>BDTR |= MOE</strong> (Main Output Enable). Без нього вихід PWM
+          не з&apos;явиться на пін, навіть якщо таймер запущений.
+        </WarningBadge>
+      )}
+
       <InfoBadge>
         f_PWM ≈ <strong>{fPwm}</strong> · CCR = {ccr} / {arr + 1} = {duty}% · {mapping?.timer} CH
-        {mapping?.channel} {mapping?.needsBDTR ? '(TIM1 — потрібен BDTR!)' : ''}
+        {mapping?.channel}{' '}
+        {mapping?.needsBDTR ? '(TIM1: потрібен BDTR→MOE!)' : '(general-purpose, без BDTR)'}
       </InfoBadge>
 
-      <CodeDisplay code={code} title={`PWM ${pin}`} />
+      <NoteBadge>
+        <strong>PWM Mode 1 (OCxM=110)</strong>: вихід HIGH, поки CNT &lt; CCR; LOW після. EGR→UG
+        примусово завантажує значення PSC/ARR/CCR з preload регістрів — без UG перші значення можуть
+        бути некоректними. OCxPE (preload enable) дозволяє безпечне оновлення CCR під час роботи.
+      </NoteBadge>
+
+      <CodeDisplay code={code} title={`PWM ${pin} → ${mapping?.timer} CH${mapping?.channel}`} />
     </div>
   );
 }
@@ -95,10 +119,11 @@ export function Task100UARTRx() {
   const [clockMhz, setClockMhz] = useState(8);
 
   const entry = UART_RX_PINS.find((e) => e.pin === pin);
+  const brr = Math.round((clockMhz * 1_000_000) / baudrate);
   const code = generateUartRx({ pin, withInterrupt: withIrq, baudrate, clockMhz });
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-4">
       <FormGrid>
         <Select
           label="RX пін"
@@ -129,16 +154,38 @@ export function Task100UARTRx() {
             label="З перериванням (RXNEIE)"
             checked={withIrq}
             onChange={setWithIrq}
-            hint="Додає NVIC_EnableIRQ та ISR"
+            hint="Додає NVIC_EnableIRQ + ISR"
           />
         </div>
       </FormGrid>
 
+      {entry?.remap && (
+        <WarningBadge>
+          Пін {pin} потребує <strong>remap</strong> через AFIO_MAPR. Код включає відповідну операцію
+          з AFIO та увімкнення AFIO clock.
+        </WarningBadge>
+      )}
+
+      <WarningBadge>
+        <strong>RX пін — input pull-up, НЕ floating!</strong> Без підтяжки незадіяна лінія може
+        &quot;плавати&quot; і генерувати хибні байти, це було на лекції. BSRR BS встановлює ODR=1 →
+        pull-up ~40 кОм. Це критично на реальних контролерах — в симуляторах може здаватись що
+        floating теж працює.
+      </WarningBadge>
+
       <InfoBadge>
-        RX налаштовується як <strong>input pull-up</strong> (не floating!) — без підтяжки незадіяна
-        лінія може генерувати хибні байти на реальних контроллерах за межами симуляторів, про це
-        було в лекціях. BSRR BS встановлює ODR=1 → pull-up.
+        BRR = {clockMhz} МГц × 10⁶ ÷ {baudrate} = <strong>{brr}</strong> · {entry?.usart} на APB
+        {entry?.apb} · RE (Receiver Enable) вмикає прийом · UE (USART Enable) запускає USART · RXNE
+        прапорець = є даних у DR.
       </InfoBadge>
+
+      {withIrq && (
+        <NoteBadge>
+          <strong>RXNEIE переривання</strong>: спрацьовує, коли RXNE=1 (є новий байт у DR). Читання
+          DR автоматично скидає RXNE. В ISR обов&apos;язково читайте DR, щоб не отримати повторне
+          переривання. ORE (Overrun) — прапорець помилки, якщо DR не прочитано до наступного байту.
+        </NoteBadge>
+      )}
 
       <CodeDisplay code={code} title={`${entry?.usart} RX ← ${pin}${withIrq ? ' + IRQ' : ''}`} />
     </div>
@@ -161,7 +208,7 @@ export function Task100TimerIRQ() {
   const code = generateTimerIrq({ timer, psc, arr, clockMhz });
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-4">
       <FormGrid>
         <Select
           label="Таймер"
@@ -194,8 +241,8 @@ export function Task100TimerIRQ() {
       </FormGrid>
 
       <InfoBadge>
-        Переривання кожні ≈ <strong>{fOut}</strong> (Update Event = переповнення лічильника). UIE у
-        DIER → UIF у SR → скинути write 1 to clear.
+        Переривання кожні ≈ <strong>1 / {fOut}</strong> (Update Event = переповнення лічильника
+        CNT→ARR→0). UIE у DIER → UIF у SR → <strong>скинути write 1 to clear</strong> (не &amp;=~!).
       </InfoBadge>
 
       <CodeDisplay code={code} title={`${timer} INTERRUPT`} />
@@ -220,8 +267,11 @@ export function Task100RCC() {
 
   const code = generateRccPll({ source, multiplier: mult, apb1Div });
 
+  const exceeds72 = sysclk > 72;
+  const apb1Exceeds36 = apb1Mhz > 36;
+
   return (
-    <div className="space-y-5">
+    <div className="space-y-4">
       <FormGrid>
         <Select
           label="Джерело PLL"
@@ -238,7 +288,7 @@ export function Task100RCC() {
           onChange={(v) => setMult(Number(v) as PllMultiplier)}
           options={MULTIPLIERS.map((m) => ({
             value: String(m),
-            label: `×${m} → ${srcMhz * m} МГц`,
+            label: `×${m} → ${srcMhz * m} МГц${srcMhz * m > 72 ? ' ⚠' : ''}`,
           }))}
         />
         <Select
@@ -247,22 +297,30 @@ export function Task100RCC() {
           onChange={(v) => setApb1Div(Number(v) as Apb1Divider)}
           options={APB1_DIVS.map((d) => ({
             value: String(d),
-            label: d === 1 ? 'Без ділення' : `÷${d} → ${sysclk / d} МГц`,
+            label:
+              d === 1 ? 'Без ділення' : `÷${d} → ${sysclk / d} МГц${sysclk / d > 36 ? ' ⚠' : ''}`,
           }))}
           hint="APB1 max 36 МГц!"
         />
       </FormGrid>
 
-      {apb1Mhz > 36 && (
-        <div className="flex items-start gap-2 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-400">
-          <span>⚠️</span>
-          <span>APB1 = {apb1Mhz} МГц &gt; 36 МГц — це перевищення специфікації STM32F103!</span>
-        </div>
+      {exceeds72 && (
+        <WarningBadge>
+          SYSCLK = {sysclk} МГц — перевищує максимум <strong>72 МГц</strong> для STM32F103! МК буде
+          нестабільним або не запуститься. Зменшіть множник PLL.
+        </WarningBadge>
+      )}
+
+      {apb1Exceeds36 && !exceeds72 && (
+        <WarningBadge>
+          APB1 = {apb1Mhz} МГц перевищує максимум <strong>36 МГц</strong>! Периферія на APB1
+          (TIM2–TIM5, USART2/3, I2C, SPI2) може працювати некоректно. Збільшіть дільник APB1.
+        </WarningBadge>
       )}
 
       <InfoBadge>
         SYSCLK = {srcMhz} × {mult} = <strong>{sysclk} МГц</strong> · APB1 = {apb1Mhz} МГц · Flash
-        wait states: {latency}WS
+        wait states: <strong>{latency}WS</strong> (0WS≤24, 1WS≤48, 2WS≤72 МГц)
       </InfoBadge>
 
       <CodeDisplay code={code} title="RCC PLL SETUP" />
