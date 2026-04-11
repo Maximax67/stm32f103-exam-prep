@@ -1,7 +1,7 @@
 import './globals.css';
 
 import type { Metadata } from 'next';
-import { JetBrains_Mono, IBM_Plex_Sans } from 'next/font/google';
+import { IBM_Plex_Sans, JetBrains_Mono } from 'next/font/google';
 
 export const metadata: Metadata = {
   title: 'STM32F103 — Підготовка до екзамену',
