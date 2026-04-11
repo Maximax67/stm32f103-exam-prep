@@ -8,6 +8,8 @@ const BASE_URL =
     ? 'https://maximax67.github.io/stm32f103-exam-prep/'
     : 'http://localhost:3000';
 
+const ICONS_PREFIX = process.env.NODE_ENV === 'production' ? '/stm32f103-exam-prep' : '';
+
 export const metadata: Metadata = {
   metadataBase: new URL(BASE_URL),
   title: {
@@ -59,6 +61,17 @@ const ibmPlexSans = IBM_Plex_Sans({
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="uk" className="dark">
+      <head>
+        <link
+          rel="icon"
+          type="image/png"
+          sizes="96x96"
+          href={`${ICONS_PREFIX}/favicon-96x96.png`}
+        />
+        <link rel="icon" href={`${ICONS_PREFIX}/favicon.svg`} type="image/svg+xml" sizes="any" />
+        <link rel="icon" href={`${ICONS_PREFIX}/favicon.ico`} />
+        <link rel="apple-touch-icon" href={`${ICONS_PREFIX}/apple-touch-icon.png`} />
+      </head>
       <body className={`${ibmPlexSans.variable} ${jetbrainsMono.variable} antialiased`}>
         {children}
       </body>
