@@ -19,6 +19,7 @@ import {
 } from '@/lib/pinUtils';
 
 import CodeDisplay from '../CodeDisplay';
+import { ExplanationPanel, ExplanationSection, RmRef } from '../ui/ExplanationPanel';
 import {
   Checkbox,
   FormGrid,
@@ -87,7 +88,7 @@ export function Task100PWM() {
 
       {isAdvancedTimer && (
         <WarningBadge>
-          <strong>TIM1 — Advanced-Control Timer!</strong> На відміну від TIM2–TIM5, TIM1 вимагає
+          <strong>TIM1 — Advanced-Control Timer!</strong> На відміну від TIM2–TIM4, TIM1 вимагає
           додаткового кроку: <strong>BDTR |= MOE</strong> (Main Output Enable). Без нього вихід PWM
           не з&apos;явиться на пін, навіть якщо таймер запущений.
         </WarningBadge>
@@ -106,6 +107,88 @@ export function Task100PWM() {
       </NoteBadge>
 
       <CodeDisplay code={code} title={`PWM ${pin} → ${mapping?.timer} CH${mapping?.channel}`} />
+
+      <ExplanationPanel>
+        <ExplanationSection title="Що таке ШІМ (PWM) і навіщо він потрібен">
+          <p>
+            PWM (Pulse Width Modulation, або ШІМ — Широтно-Імпульсна Модуляція) — це спосіб передати
+            аналогову інформацію через цифровий сигнал. Сигнал постійно перемикається між HIGH і
+            LOW, але змінюється <em>тривалість</em> HIGH відносно одного циклу.
+          </p>
+          <p>
+            Якщо HIGH займає 50% часу (duty cycle = 50%) — навантаження отримує &quot;ніби&quot;
+            половину напруги живлення. 10% duty — ніби 10% напруги. Так керують яскравістю LED,
+            швидкістю моторів, нагрівом тощо. Людське вухо/око не помічає швидких перемикань і
+            сприймає &quot;середнє&quot; значення.{' '}
+            <RmRef section="15.3.9" page={372} label="RM0008 §15.3.9 PWM mode" />
+          </p>
+        </ExplanationSection>
+
+        <ExplanationSection title="CCR — як задається duty cycle">
+          <p>
+            Лічильник таймера рахує від 0 до ARR. Регістр <strong>CCR</strong> (Capture/Compare
+            Register) — це &quot;точка перемикання&quot;. У PWM Mode 1:
+          </p>
+          <p className="rounded border border-slate-700 bg-slate-900 p-3 font-mono text-xs leading-6 text-slate-300">
+            CNT &lt; CCR → вихід HIGH
+            <br />
+            CNT ≥ CCR → вихід LOW
+          </p>
+          <p>
+            Duty cycle = CCR / (ARR + 1). Якщо ARR=999 і CCR=500 → duty = 50%. Якщо CCR=100 → duty =
+            10%. Ось чому CCR = (duty / 100) * (ARR + 1).{' '}
+            <RmRef section="15.4.13" page={398} label="RM0008 §15.4.13 CCR" />
+          </p>
+        </ExplanationSection>
+
+        <ExplanationSection title="CCMR — режим роботи каналу (OCxM=110)">
+          <p>
+            Кожен канал таймера (CH1–CH4) має свій регістр <strong>CCMR</strong> (Capture/Compare
+            Mode Register). Канали 1 і 2 — у CCMR1, канали 3 і 4 — у CCMR2.
+          </p>
+          <p>
+            Поле <strong>OCxM</strong> вибирає режим: 000 = frozen, 001 = active, 110 = PWM Mode 1,
+            111 = PWM Mode 2 і т.д. Нам потрібен <strong>110 (PWM Mode 1)</strong>: HIGH поки CNT
+            {' < '}CCR, LOW після. Також встановлюємо <strong>OCxPE</strong> (Preload Enable) — це
+            дозволяє змінювати CCR &quot;на льоту&quot; без артефактів.{' '}
+            <RmRef section="15.4.7" page={391} label="RM0008 §15.4.7 CCMR1" />
+          </p>
+        </ExplanationSection>
+
+        <ExplanationSection title="CCER — увімкнення виходу каналу (CCxE)">
+          <p>
+            Навіть якщо CCMR налаштовано, вихід каналу ще заблокований. Регістр{' '}
+            <strong>CCER</strong> (Capture/Compare Enable Register) містить біт{' '}
+            <strong>CCxE</strong> для кожного каналу. Встановлення цього біта &quot;відкриває&quot;
+            вихід і підключає PWM-сигнал до фізичного піна.{' '}
+            <RmRef section="15.4.9" page={394} label="RM0008 §15.4.9 CCER" />
+          </p>
+        </ExplanationSection>
+
+        <ExplanationSection title="TIM1 і BDTR MOE — чому advanced timer складніший">
+          <p>
+            TIM1 — це &quot;advanced-control timer&quot;. На відміну від TIM2–TIM4, він додатково
+            підтримує комплементарні виходи (для керування H-bridge), dead-time генерацію і захист
+            від аварійних ситуацій. Через це є додатковий регістр безпеки:{' '}
+            <strong>BDTR (Break and Dead-Time Register)</strong>. Він вимагає явного встановлення
+            біта <strong>MOE (Main Output Enable)</strong> — інакше всі виходи TIM1 заблоковані
+            апаратно, навіть якщо все інше налаштовано правильно. TIM2–TIM4 цього не потребують.{' '}
+            <RmRef section="15.4.18" page={404} label="RM0008 §15.4.18 BDTR" />
+          </p>
+        </ExplanationSection>
+
+        <ExplanationSection title="EGR UG — навіщо примусово оновлювати preload">
+          <p>
+            PSC і ARR — preloaded registers: зміни набувають чинності лише після наступного Update
+            Event. Але якщо ми щойно увімкнули таймер і ще не було жодного UE — лічильник може
+            почати рахувати зі старими (невизначеними) значеннями. Запис{' '}
+            <strong>EGR = TIM_EGR_UG</strong> (Update Generation) примусово генерує Update Event
+            прямо зараз, завантажуючи PSC/ARR/CCR з preload регістрів у робочі. Завжди робіть це
+            перед запуском таймера через PWM.{' '}
+            <RmRef section="15.4.6" page={391} label="RM0008 §15.4.6 EGR" />
+          </p>
+        </ExplanationSection>
+      </ExplanationPanel>
     </div>
   );
 }
@@ -188,6 +271,64 @@ export function Task100UARTRx() {
       )}
 
       <CodeDisplay code={code} title={`${entry?.usart} RX ← ${pin}${withIrq ? ' + IRQ' : ''}`} />
+
+      <ExplanationPanel>
+        <ExplanationSection title="RX пін — чому input pull-up, а не floating">
+          <p>
+            UART RX — це <em>вхід</em>. Коли ніхто нічого не передає, лінія повинна бути у
+            визначеному стані. Стандарт UART говорить: лінія у стані IDLE — це логічна 1 (HIGH).
+            Пакет даних починається з стартового біта (LOW).
+          </p>
+          <p>
+            Якщо RX пін floating (не підтягнутий), при відключеному передавачі він
+            &quot;плаває&quot; між 0 і 1 через наводки. USART буде бачити хибні стартові біти і
+            генерувати &quot;сміттєві&quot; байти у буфері. Pull-up (~40 кОм до VCC) тримає лінію на
+            HIGH в стані IDLE і запобігає цьому.{' '}
+            <RmRef section="27.3.2" page={794} label="RM0008 §27.3.2 USART" />
+          </p>
+        </ExplanationSection>
+
+        <ExplanationSection title="RE — Receiver Enable і відмінність від TX">
+          <p>
+            Для прийому (RX) налаштовуємо біт <strong>RE (Receiver Enable)</strong> замість TE. Коли
+            RE=1, USART починає &quot;слухати&quot; лінію: він чекає стартовий біт (LOW), потім
+            зчитує 8 (або 9) бітів даних, перевіряє стопові біти і кладе отриманий байт у регістр DR
+            (Data Register).
+          </p>
+          <p>
+            При цьому RX пін налаштовується як <em>input</em> (MODE=00, CNF=10), а не AF output.
+            Периферія читає значення з піна, нічого не виводить.
+          </p>
+        </ExplanationSection>
+
+        <ExplanationSection title='RXNE — прапорець "є новий байт"'>
+          <p>
+            Коли USART прийняв байт і поклав його у DR, встановлюється прапорець{' '}
+            <strong>RXNE (RX Not Empty)</strong> у регістрі SR (Status Register). Це сигнал:
+            &quot;можна читати!&quot;. Після читання DR прапорець автоматично скидається.
+          </p>
+          <p>
+            Якщо ви не встигнете прочитати DR до приходу наступного байту — прапорець{' '}
+            <strong>ORE (Overrun Error)</strong> встановиться і старий байт буде втрачено.{' '}
+            <RmRef section="27.6.1" page={821} label="RM0008 §27.6.1 USART SR" />
+          </p>
+        </ExplanationSection>
+
+        <ExplanationSection title="RXNEIE + NVIC — прийом через переривання">
+          <p>
+            Замість постійної перевірки &quot;чи є новий байт?&quot; у циклі (polling), можна
+            увімкнути переривання. Біт <strong>RXNEIE</strong> у CR1 дозволяє USART генерувати
+            переривання щоразу, коли RXNE=1. Але самого RXNEIE недостатньо — потрібно ще увімкнути
+            переривання у <strong>NVIC (Nested Vectored Interrupt Controller)</strong> через{' '}
+            <code className="rounded bg-slate-800 px-1 text-rose-300">NVIC_EnableIRQ()</code>.
+          </p>
+          <p>
+            В ISR (обробнику переривання) обов&apos;язково читайте DR — це автоматично скине RXNE і
+            запобіжить повторному виклику ISR. Не читати DR в ISR = нескінченний цикл переривань.{' '}
+            <RmRef section="27.6.4" page={825} label="RM0008 §27.6.4 CR1 RXNEIE" />
+          </p>
+        </ExplanationSection>
+      </ExplanationPanel>
     </div>
   );
 }
@@ -246,6 +387,76 @@ export function Task100TimerIRQ() {
       </InfoBadge>
 
       <CodeDisplay code={code} title={`${timer} INTERRUPT`} />
+
+      <ExplanationPanel>
+        <ExplanationSection title="Переривання від таймера — навіщо і як">
+          <p>
+            Уявіть, що вам потрібно блимати LED кожну секунду. Найпростіший варіант — HAL_Delay, але
+            за цей час МК нічого більше не робить. З перериванням таймера можна: МК виконує основний
+            код, таймер рахує у фоні, кожну секунду автоматично викликається ISR і перемикає LED.
+            Основний код не переривається надовго — лише на кілька наносекунд ISR.
+          </p>
+        </ExplanationSection>
+
+        <ExplanationSection title="DIER UIE — дозвіл переривання від таймера">
+          <p>
+            Регістр <strong>DIER</strong> (DMA/Interrupt Enable Register) керує тим, які події
+            таймера можуть генерувати переривання або DMA-запити. Біт{' '}
+            <strong>UIE (Update Interrupt Enable)</strong> дозволяє переривання від{' '}
+            <strong>Update Event</strong> — тобто від переповнення лічильника (CNT досягає ARR і
+            скидається до 0). <RmRef section="15.4.4" page={389} label="RM0008 §15.4.4 DIER" />
+          </p>
+        </ExplanationSection>
+
+        <ExplanationSection title="NVIC — контролер переривань">
+          <p>
+            NVIC (Nested Vectored Interrupt Controller) — це апаратний &quot;диспетчер&quot;
+            переривань у ядрі ARM Cortex-M3. Він приймає сигнали від усіх периферій (USART, таймери,
+            GPIO...) і вирішує, яке переривання обробляти зараз, якщо їх кілька.
+          </p>
+          <p>
+            <code className="rounded bg-slate-800 px-1 text-rose-300">
+              NVIC_EnableIRQ(TIM3_IRQn)
+            </code>{' '}
+            каже NVIC: &quot;слухай переривання від TIM3&quot;. Без цього навіть якщо UIE=1,
+            процесор не отримає переривання — NVIC його заблокує. Це два незалежних рівні дозволу.
+          </p>
+        </ExplanationSection>
+
+        <ExplanationSection title="ISR — обробник переривання і скидання UIF">
+          <p>
+            Коли таймер переповнюється, він встановлює прапорець{' '}
+            <strong>UIF (Update Interrupt Flag)</strong> у регістрі SR. Якщо UIE=1 і NVIC дозволено
+            — викликається ISR (Interrupt Service Routine). Ім&apos;я функції строго визначене:
+            TIM3_IRQHandler, TIM2_IRQHandler і т.д.
+          </p>
+          <p>
+            <strong>Критично важливо</strong> на початку ISR скинути прапорець UIF — інакше після
+            повернення з ISR він залишиться встановленим і NVIC одразу знову викличе ISR. Це
+            нескінченний цикл переривань, в якому основний код взагалі не виконується.
+          </p>
+          <p>
+            Як скинути? Записати 0 у відповідний біт SR:{' '}
+            <code className="rounded bg-slate-800 px-1 text-sky-300">
+              TIM3-&gt;SR &amp;= ~TIM_SR_UIF
+            </code>
+            . Зверніть увагу: тут &= ~ (записуємо 0), на відміну від EXTI PR де записуємо 1.{' '}
+            <RmRef section="15.4.5" page={390} label="RM0008 §15.4.5 SR" />
+          </p>
+        </ExplanationSection>
+
+        <ExplanationSection title="extern C — чому потрібен C linkage">
+          <p>
+            C++ &quot;прикрашає&quot; (mangling) імена функцій: void TIM3_IRQHandler() в C++
+            насправді зберігається у бінарнику під іншим іменем типу _ZN12TIM3_IRQHandlerEv. Але
+            таблиця векторів переривань (яку знає Cortex-M3) містить C-ім&apos;я TIM3_IRQHandler без
+            декорування. Тому ми пишемо{' '}
+            <code className="rounded bg-slate-800 px-1 text-sky-300">extern &quot;C&quot;</code> —
+            щоб компілятор не декорував ім&apos;я і лінкер зміг знайти обробник за правильною
+            адресою.
+          </p>
+        </ExplanationSection>
+      </ExplanationPanel>
     </div>
   );
 }
@@ -314,7 +525,7 @@ export function Task100RCC() {
       {apb1Exceeds36 && !exceeds72 && (
         <WarningBadge>
           APB1 = {apb1Mhz} МГц перевищує максимум <strong>36 МГц</strong>! Периферія на APB1
-          (TIM2–TIM5, USART2/3, I2C, SPI2) може працювати некоректно. Збільшіть дільник APB1.
+          (TIM2–TIM4, USART2/3, I2C, SPI2) може працювати некоректно. Збільшіть дільник APB1.
         </WarningBadge>
       )}
 
@@ -324,6 +535,98 @@ export function Task100RCC() {
       </InfoBadge>
 
       <CodeDisplay code={code} title="RCC PLL SETUP" />
+
+      <ExplanationPanel>
+        <ExplanationSection title="Дерево тактування STM32 — загальна картина">
+          <p>
+            За замовчуванням після скидання STM32F103 запускається від{' '}
+            <strong>HSI (High Speed Internal)</strong> — внутрішнього RC-генератора з частотою 8
+            МГц. Це дозволяє МК стартувати навіть без зовнішнього кварцу, але точність HSI ±1–2%.
+            Щоб досягти максимальної швидкодії (72 МГц) і точної частоти — потрібен PLL.{' '}
+            <RmRef section="7.2" page={98} label="RM0008 §7.2 Clock tree" />
+          </p>
+        </ExplanationSection>
+
+        <ExplanationSection title="Крок 1 — HSE: зовнішній кварц і HSERDY">
+          <p>
+            <strong>HSE (High Speed External)</strong> — вхід для зовнішнього кварцового резонатора
+            або тактового сигналу. Наш кварц — 8 МГц. Після встановлення HSEON МК чекає, поки кварц
+            стабілізується — прапорець <strong>HSERDY</strong> встановлюється апаратно. Типовий час
+            стабілізації кварцу: 1–20 мс. Тому{' '}
+            <code className="rounded bg-slate-800 px-1 text-amber-300">
+              while (!(RCC-&gt;CR & RCC_CR_HSERDY)) {}
+            </code>{' '}
+            — це не нескінченний цикл, а чекання на реальну готовність генератора.{' '}
+            <RmRef section="7.3.1" page={99} label="RM0008 §7.3.1 RCC_CR" />
+          </p>
+        </ExplanationSection>
+
+        <ExplanationSection title="Крок 2 — Flash wait states: найнесподіваніший крок">
+          <p>
+            Це той крок, який забувають найчастіше, і МК потім поводиться дивно. Flash-пам&apos;ять
+            (де зберігається ваша програма) не може читатися нескінченно швидко. При підвищенні
+            системної частоти треба додати &quot;паузи&quot; (wait states), щоб процесор встигав
+            отримати дані з Flash:
+          </p>
+          <p className="rounded border border-slate-700 bg-slate-900 p-3 font-mono text-xs leading-6 text-slate-300">
+            SYSCLK ≤ 24 МГц → 0 wait states (читання з першого разу)
+            <br />
+            24 МГц {'<'} SYSCLK ≤ 48 МГц → 1 wait state (один такт очікування)
+            <br />
+            48 МГц {'<'} SYSCLK ≤ 72 МГц → 2 wait states (два такти очікування)
+          </p>
+          <p>
+            Якщо не виставити wait states і одразу перемкнути на 72 МГц — процесор буде читати Flash
+            занадто швидко, отримувати невірні інструкції і, скоріш за все, зависне або впаде у
+            HardFault. <RmRef section="3.3.3" page={60} label="RM0008 §3.3.3 FLASH_ACR" />
+          </p>
+        </ExplanationSection>
+
+        <ExplanationSection title="Крок 3 — PLL: множник частоти">
+          <p>
+            PLL (Phase-Locked Loop, схема фазового автопідстроювання) — це аналоговий блок, що
+            &quot;множить&quot; вхідну частоту. Джерело (HSE або HSI/2) подається на PLL, який
+            множить частоту на заданий коефіцієнт PLLMULL. Для 72 МГц з HSE=8 МГц: PLLMULL=9 →
+            8×9=72 МГц.
+          </p>
+          <p>
+            Чому HSI/2? Якщо джерело — HSI (internal RC), то PLL отримує HSI/2 = 4 МГц (ділення на 2
+            апаратно зафіксоване). Тому з HSI отримати 72 МГц неможливо (4×16=64 — максимум при
+            mult=16). З HSE 8 МГц — можливо (8×9=72).{' '}
+            <RmRef section="7.3.2" page={100} label="RM0008 §7.3.2 RCC_CFGR" />
+          </p>
+        </ExplanationSection>
+
+        <ExplanationSection title="APB1 divider — чому не можна залишити без ділення">
+          <p>
+            Після PLL ми маємо SYSCLK = 72 МГц. Від нього через AHB prescaler (зазвичай 1) отримуємо
+            HCLK = 72 МГц. Далі — шини APB1 і APB2. APB2 може тактуватися на повній частоті HCLK (72
+            МГц). Але <strong>APB1 обмежена 36 МГц</strong> за специфікацією.
+          </p>
+          <p>
+            Якщо залишити APB1 без ділення при SYSCLK=72 МГц — периферія на APB1 (TIM2-4, USART2/3,
+            I2C1/2, SPI2) буде тактуватися на 72 МГц, перевищуючи максимум. Наслідки: нестабільна
+            робота, перегрів. Тому ставимо PPRE1=÷2 → APB1=36 МГц. До речі: таймери TIM2-4 при
+            APB1≠1 отримують подвоєну частоту APB1 = 72 МГц — це спеціальна схема в дереві
+            тактування. <RmRef section="7.2" page={98} label="RM0008 §7.2 Clock diagram" />
+          </p>
+        </ExplanationSection>
+
+        <ExplanationSection title="Кроки 5–6 — PLLON, PLLRDY і перемикання SW">
+          <p>
+            Тепер вмикаємо PLL (PLLON=1) і чекаємо стабілізацію (PLLRDY=1). PLL теж потребує часу —
+            зазвичай кілька мілісекунд.
+          </p>
+          <p>
+            Нарешті перемикаємо системну частоту: поле <strong>SW (System clock Switch)</strong> у
+            RCC_CFGR. SW=10 означає &quot;джерело SYSCLK = PLL&quot;. Після запису чекаємо
+            підтвердження через <strong>SWS (System clock Switch Status)</strong> — апаратний
+            прапорець, що підтверджує успішне перемикання. Лише після цього частота реально
+            переключилася і код виконується на 72 МГц.{' '}
+            <RmRef section="7.3.2" page={100} label="RM0008 §7.3.2 SW/SWS" />
+          </p>
+        </ExplanationSection>
+      </ExplanationPanel>
     </div>
   );
 }

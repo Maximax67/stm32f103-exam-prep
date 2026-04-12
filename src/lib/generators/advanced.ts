@@ -20,7 +20,7 @@ export function generatePwm(cfg: PwmConfig): string {
   const fOut = (cfg.clockMhz * 1_000_000) / ((cfg.psc + 1) * (cfg.arr + 1));
 
   const lines: string[] = [];
-  lines.push('// RM: Section 15.3.9 PWM mode');
+  lines.push('// RM0008: Section 15.3.9 PWM mode');
   lines.push('');
   lines.push(`// 1. Тактування GPIO${p.port} + AFIO + ${m.timer}`);
   lines.push(`RCC->APB2ENR |= ${p.clockBit} | RCC_APB2ENR_AFIOEN;`);
@@ -84,11 +84,12 @@ export function generateUartRx(cfg: UartRxConfig): string {
 
   const { usart, apb, clockBit, remap, irqName, usartNum } = entry;
   const p = parsePinInfo(cfg.pin);
-  const brr = Math.round((cfg.clockMhz * 1_000_000) / cfg.baudrate);
+  const clkHz = cfg.clockMhz * 1_000_000;
+  const brr = Math.round(clkHz / cfg.baudrate);
   const enrReg = apb === 1 ? 'APB1ENR' : 'APB2ENR';
 
   const lines: string[] = [];
-  lines.push('// RM: Section 27.6.4 USART_CR1');
+  lines.push('// RM0008: Section 27.6.4 USART_CR1');
   lines.push('');
   lines.push(`// 1. Тактування GPIO${p.port}, AFIO та ${usart}`);
   lines.push(`RCC->APB2ENR |= ${p.clockBit} | RCC_APB2ENR_AFIOEN;`);
@@ -115,7 +116,8 @@ export function generateUartRx(cfg: UartRxConfig): string {
   lines.push(`GPIO${p.port}->BSRR = GPIO_BSRR_BS${p.num};              // pull-UP (ODR=1)`);
   lines.push('');
   lines.push(`// ${remap ? 4 : 3}. Baudrate`);
-  lines.push(`${usart}->BRR = ${brr};   // ${cfg.clockMhz} МГц / ${cfg.baudrate}`);
+  lines.push(`//    ${cfg.clockMhz} МГц / ${cfg.baudrate} bps = ${brr}`);
+  lines.push(`${usart}->BRR = ${clkHz} / ${cfg.baudrate};`);
   lines.push('');
   lines.push(`// ${remap ? 5 : 4}. Увімкнути RX`);
   lines.push(`${usart}->CR1 |= USART_CR1_RE;   // Receiver Enable`);
@@ -159,7 +161,7 @@ export function generateTimerIrq(cfg: TimerIrqConfig): string {
   const fOut = (cfg.clockMhz * 1_000_000) / ((cfg.psc + 1) * (cfg.arr + 1));
 
   const lines: string[] = [];
-  lines.push('// RM: Section 15.4.4 TIMx_DIER (DMA/Interrupt Enable Register)');
+  lines.push('// RM0008: Section 15.4.4 TIMx_DIER (DMA/Interrupt Enable Register)');
   lines.push('');
   lines.push(`// 1. Тактування ${cfg.timer}`);
   lines.push(`RCC->${enrReg} |= ${clockBit};`);
@@ -223,7 +225,7 @@ export function generateRccPll(cfg: RccPllConfig): string {
   const latMacro = `FLASH_ACR_LATENCY_${latency}`;
 
   const lines: string[] = [];
-  lines.push('// RM: Section 7.2 Clock tree + Section 7.3.2 RCC_CFGR');
+  lines.push('// RM0008: Section 7.2 Clock tree + Section 7.3.2 RCC_CFGR');
   lines.push('');
 
   if (cfg.source === 'HSE') {

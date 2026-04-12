@@ -33,6 +33,39 @@ export function cnfMask(p: PinInfo, suffix = ''): string {
   return `GPIO_${p.regSuffix}_CNF${p.num}${suffix}`;
 }
 
+// ─── JTAG / SWD pin detection ─────────────────────────────────────────────────
+// STM32F103 default SWJ (Serial Wire JTAG) mapping:
+//   PA13 = JTMS / SWDIO   ← SWD pin, DO NOT free without losing debug!
+//   PA14 = JTCK / SWCLK   ← SWD pin, DO NOT free without losing debug!
+//   PA15 = JTDI            ← JTAG only, can be freed with JTAGDISABLE
+//   PB3  = JTDO / SWO      ← JTAG only (SWO trace), can be freed with JTAGDISABLE
+//   PB4  = NJTRST          ← JTAG only, can be freed with JTAGDISABLE
+//
+// To free PA15 / PB3 / PB4: AFIO->MAPR |= AFIO_MAPR_SWJ_CFG_JTAGDISABLE  (safe, keeps SWD)
+// To free PA13 / PA14:      AFIO->MAPR |= AFIO_MAPR_SWJ_CFG_DISABLE       (loses debug!)
+// Reference: RM0008 Section 9.3.1, Table 5 "SWJ port pin assignment"
+
+export type JtagPinKind = 'jtag_only' | 'swd';
+
+export interface JtagPinInfo {
+  kind: JtagPinKind;
+  /** Alternate function name printed in the signal column of the datasheet */
+  signalName: string;
+}
+
+const JTAG_PIN_MAP: Record<string, JtagPinInfo> = {
+  PA13: { kind: 'swd', signalName: 'JTMS / SWDIO' },
+  PA14: { kind: 'swd', signalName: 'JTCK / SWCLK' },
+  PA15: { kind: 'jtag_only', signalName: 'JTDI' },
+  PB3: { kind: 'jtag_only', signalName: 'JTDO / SWO' },
+  PB4: { kind: 'jtag_only', signalName: 'NJTRST' },
+};
+
+/** Returns JTAG metadata for a pin, or null if the pin is not JTAG/SWD-related. */
+export function getJtagInfo(pin: string): JtagPinInfo | null {
+  return JTAG_PIN_MAP[pin] ?? null;
+}
+
 // ─── GPIO pin lists ──────────────────────────────────────────────────────────
 
 export const ALL_GPIO_PINS: string[] = [
@@ -260,7 +293,6 @@ export const TIMERS: TimerInfo[] = [
   { name: 'TIM2', apb: 1, clockBit: 'RCC_APB1ENR_TIM2EN', irqName: 'TIM2_IRQn' },
   { name: 'TIM3', apb: 1, clockBit: 'RCC_APB1ENR_TIM3EN', irqName: 'TIM3_IRQn' },
   { name: 'TIM4', apb: 1, clockBit: 'RCC_APB1ENR_TIM4EN', irqName: 'TIM4_IRQn' },
-  { name: 'TIM5', apb: 1, clockBit: 'RCC_APB1ENR_TIM5EN', irqName: 'TIM5_IRQn' },
 ];
 
 // ─── EXTI mapping ─────────────────────────────────────────────────────────────

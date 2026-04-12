@@ -31,7 +31,7 @@ export function generateTimerSetup(cfg: TimerSetupConfig): string {
   const fOutStr = fOut >= 1 ? `${fOut.toFixed(2)} Гц` : `${(fOut * 1000).toFixed(2)} мГц`;
 
   const lines: string[] = [];
-  lines.push('// RM: Section 15.4 TIM registers');
+  lines.push('// RM0008: Section 15.4 TIM registers');
   lines.push('');
   lines.push(`// 1. Тактування ${cfg.timer} на шині APB${apb}`);
   lines.push(`RCC->${enrReg} |= ${clockBit};`);
@@ -109,7 +109,7 @@ export function generateAdcSetup(cfg: AdcSetupConfig): string {
   const p = parsePinInfo(cfg.pin);
 
   const lines: string[] = [];
-  lines.push('// RM: Section 11.12 ADC registers');
+  lines.push('// RM0008: Section 11.12 ADC registers');
   lines.push('');
   lines.push(`// 1. Тактування GPIO${p.port} + ADC1`);
   lines.push(`RCC->APB2ENR |= ${p.clockBit} | RCC_APB2ENR_ADC1EN;`);
@@ -158,12 +158,13 @@ export function generateUartTx(cfg: UartTxConfig): string {
 
   const { usart, apb, clockBit, remap } = entry;
   const p = parsePinInfo(cfg.pin);
-  const brr = Math.round((cfg.clockMhz * 1_000_000) / cfg.baudrate);
+  const clkHz = cfg.clockMhz * 1_000_000;
+  const brr = Math.round(clkHz / cfg.baudrate);
   const enrReg = apb === 1 ? 'APB1ENR' : 'APB2ENR';
   const usartNum = entry.usartNum;
 
   const lines: string[] = [];
-  lines.push('// RM: Section 27.6 USART registers');
+  lines.push('// RM0008: Section 27.6 USART registers');
   lines.push('');
   lines.push(`// 1. Тактування GPIO${p.port}, AFIO та ${usart}`);
   lines.push(`RCC->APB2ENR |= ${p.clockBit} | RCC_APB2ENR_AFIOEN;`);
@@ -188,8 +189,8 @@ export function generateUartTx(cfg: UartTxConfig): string {
   );
   lines.push('');
   lines.push(`// ${remap ? 4 : 3}. Baudrate = PCLK${apb} / BRR`);
-  lines.push(`//    ${cfg.clockMhz} МГц / ${cfg.baudrate} = ${brr} (цілочисельний)`);
-  lines.push(`${usart}->BRR = ${brr};`);
+  lines.push(`//    ${cfg.clockMhz} МГц / ${cfg.baudrate} bps = ${brr}`);
+  lines.push(`${usart}->BRR = ${clkHz} / ${cfg.baudrate};`);
   lines.push('');
   lines.push(`// ${remap ? 5 : 4}. Увімкнути TX (TE) та сам USART (UE)`);
   lines.push(`${usart}->CR1 |= USART_CR1_TE;   // Transmitter Enable`);
@@ -215,7 +216,7 @@ export function generateExti(cfg: ExtiConfig): string {
   const irq = extiIrqName(p.num);
 
   const lines: string[] = [];
-  lines.push('// RM: Section 10.3 EXTI + Section 9.4.3 AFIO_EXTICR');
+  lines.push('// RM0008: Section 10.3 EXTI + Section 9.4.3 AFIO_EXTICR');
   lines.push('');
   lines.push(`// 1. Тактування GPIO${p.port} та AFIO (для маршрутизації EXTI)`);
   lines.push(`RCC->APB2ENR |= ${p.clockBit} | RCC_APB2ENR_AFIOEN;`);

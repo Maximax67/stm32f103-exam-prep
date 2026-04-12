@@ -17,6 +17,7 @@ import {
 } from '@/lib/pinUtils';
 
 import CodeDisplay from '../CodeDisplay';
+import { ExplanationPanel, ExplanationSection, RmRef } from '../ui/ExplanationPanel';
 import {
   FormGrid,
   InfoBadge,
@@ -28,7 +29,7 @@ import {
 
 // ─── TIM Setup ────────────────────────────────────────────────────────────────
 
-const TIMERS_85 = ['TIM2', 'TIM3', 'TIM4', 'TIM5'];
+const TIMERS_85 = ['TIM2', 'TIM3', 'TIM4'];
 
 export function Task85Timer() {
   const [timer, setTimer] = useState('TIM3');
@@ -55,7 +56,7 @@ export function Task85Timer() {
           value={timer}
           onChange={setTimer}
           options={TIMERS_85.map((t) => ({ value: t, label: t }))}
-          hint="TIM2–TIM5 на шині APB1"
+          hint="TIM2–TIM4 на шині APB1"
         />
         <Select
           label="Тактова частота APB (МГц)"
@@ -88,13 +89,87 @@ export function Task85Timer() {
       </InfoBadge>
 
       <NoteBadge>
-        <strong>TIM2–TIM5</strong> — general-purpose таймери на шині <strong>APB1</strong>. Якщо
+        <strong>TIM2–TIM4</strong> — general-purpose таймери на шині <strong>APB1</strong>. Якщо
         APB1 prescaler ≠ 1 (наприклад, при 72 МГц SYSCLK та APB1÷2=36 МГц), таймери отримують
         подвоєну частоту APB1 = 72 МГц. У цьому тренажері вкажіть реальну частоту таймера, а не
         APB1.
       </NoteBadge>
 
       <CodeDisplay code={code} title={`${timer} SETUP`} />
+
+      <ExplanationPanel>
+        <ExplanationSection title="Що таке таймер у мікроконтролері">
+          <p>
+            Таймер — це, по суті, лічильник усередині МК, що рахує тактові імпульси. Уявіть одометр
+            у машині, тільки замість кілометрів він рахує наносекунди. Коли він досягає заданого
+            значення — він скидається і генерує подію (Update Event). Цю подію можна використати
+            для: генерації переривань з точним інтервалом, запуску ШІМ, захоплення часу зовнішніх
+            подій, і багато іншого.
+          </p>
+          <p>
+            STM32F103 має кілька типів таймерів. TIM2–TIM4 — це <strong>general-purpose</strong>{' '}
+            таймери: прості, гнучкі, 16-бітні лічильники. TIM1 — advanced (більше функцій, але
+            складніший). <RmRef section="15.1" page={347} label="RM0008 §15 Timers" />
+          </p>
+        </ExplanationSection>
+
+        <ExplanationSection title="Крок 1 — RCC APB1ENR: тактування таймера">
+          <p>
+            TIM2–TIM4 підключені до шини <strong>APB1</strong> (не APB2, як GPIO!). Тому їх
+            тактування вмикається через <strong>RCC→APB1ENR</strong>. Відповідний біт —{' '}
+            <code className="rounded bg-slate-800 px-1 text-sky-300">RCC_APB1ENR_TIM3EN</code> для
+            TIM3 і т.д. Без цього лічильник не рахує — він просто &quot;заморожений&quot;.{' '}
+            <RmRef section="7.3.8" page={114} label="RM0008 §7.3.8 APB1ENR" />
+          </p>
+        </ExplanationSection>
+
+        <ExplanationSection title="Крок 2 — PSC: prescaler (попередній дільник)">
+          <p>
+            Припустімо, що тактова частота МК — 8 МГц. Це означає 8 000 000 імпульсів на секунду.
+            Лічильник таймера 16-бітний (рахує від 0 до 65535). Якщо він рахуватиме кожен імпульс,
+            він переповниться за 65535 / 8 000 000 ≈ 8 мс — дуже швидко.
+          </p>
+          <p>
+            Регістр <strong>PSC (Prescaler)</strong> ділить вхідну частоту перед тим, як вона
+            потрапляє до лічильника. Формула проста:{' '}
+            <code className="rounded bg-slate-800 px-1 text-sky-300">
+              f_cnt = f_clk / (PSC + 1)
+            </code>
+            . Плюс один — тому що PSC=0 означає &quot;ділити на 1&quot;, а не &quot;зупинити&quot;.
+          </p>
+          <p>
+            PSC=7999 при f_clk=8 МГц → f_cnt = 8 000 000 / 8000 = <strong>1000 Гц</strong> (1 кГц).
+            Тепер лічильник тікає з частотою 1 кГц = 1 мс на крок.{' '}
+            <RmRef section="15.4.7" page={393} label="RM0008 §15.4.7 TIMx_PSC" />
+          </p>
+        </ExplanationSection>
+
+        <ExplanationSection title="Крок 3 — ARR: auto-reload (до якого рахуємо)">
+          <p>
+            Регістр <strong>ARR (Auto-Reload Register)</strong> задає верхню межу лічильника.
+            Лічильник рахує: 0, 1, 2 ... ARR, потім скидається до 0 — і знову. Момент скидання
+            називається <strong>Update Event</strong>. Частота цих подій:{' '}
+            <code className="rounded bg-slate-800 px-1 text-sky-300">
+              f_out = f_cnt / (ARR + 1)
+            </code>
+            .
+          </p>
+          <p>
+            Якщо f_cnt = 1 кГц і ARR = 999, то f_out = 1000 / 1000 = <strong>1 Гц</strong> — Update
+            Event відбувається раз на секунду. Ось як налаштовується точний інтервал!{' '}
+            <RmRef section="15.4.8" page={393} label="RM0008 §15.4.8 TIMx_ARR" />
+          </p>
+        </ExplanationSection>
+
+        <ExplanationSection title="Крок 4 — CR1 CEN: запуск лічильника">
+          <p>
+            Після налаштування PSC і ARR таймер ще не рахує. Потрібно встановити біт{' '}
+            <strong>CEN (Counter ENable)</strong> у регістрі <strong>CR1</strong> (Control Register
+            1). Це буквально &quot;натиснути кнопку старт&quot;. Лічильник починає відраховувати
+            тактові імпульси. <RmRef section="15.4.1" page={388} label="RM0008 §15.4.1 TIMx_CR1" />
+          </p>
+        </ExplanationSection>
+      </ExplanationPanel>
     </div>
   );
 }
@@ -152,7 +227,6 @@ export function Task85ADC() {
   const smprReg = ch >= 10 ? 'SMPR1' : 'SMPR2';
   const code = generateAdcSetup({ pin, sampleTime });
 
-  // PC pins warning for T6
   const pcWarning =
     pin.startsWith('PC') && parseInt(pin.slice(2)) < 13
       ? `ADC CH${ch} (${pin}): GPIOC PC0–PC12 відсутні на STM32F103T6. Для ADC краще використовувати PA0–PA7 або PB0–PB1.`
@@ -193,6 +267,76 @@ export function Task85ADC() {
       </NoteBadge>
 
       <CodeDisplay code={code} title={`ADC1 CH${ch} ← ${pin}`} />
+
+      <ExplanationPanel>
+        <ExplanationSection title="Що таке АЦП і як він працює">
+          <p>
+            АЦП (Аналого-Цифровий Перетворювач) — це пристрій, що вимірює аналогову напругу на пін і
+            перетворює її в числове значення. STM32F103 має 12-бітний АЦП — це означає, що результат
+            від 0 до 4095 (2¹² − 1). При живленні 3.3В: 0 = 0В, 4095 = 3.3В, 2048 ≈ 1.65В. Тобто
+            роздільна здатність: 3.3В / 4096 ≈ 0.8 мВ на крок.{' '}
+            <RmRef section="11" page={215} label="RM0008 §11 ADC" />
+          </p>
+        </ExplanationSection>
+
+        <ExplanationSection title="Крок 1 — GPIO аналоговий режим (MODE=00, CNF=00)">
+          <p>
+            Для АЦП пін повинен бути у <strong>аналоговому режимі</strong>: MODE=00 і CNF=00 — всі
+            біти нулі. В цьому режимі цифровий вхідний буфер відключається повністю — це зменшує
+            шуми. Якщо залишити пін у digital floating, АЦП буде бачити перешкоди від самої цифрової
+            логіки. Аналоговий режим — це &quot;ізоляція&quot; від цифрового світу.{' '}
+            <RmRef section="9.2.1" page={172} />
+          </p>
+        </ExplanationSection>
+
+        <ExplanationSection title="Крок 3 — CR2 ADON: увімкнення АЦП">
+          <p>
+            Біт <strong>ADON (ADC ON)</strong> у регістрі CR2 — це вмикач АЦП. Перший запис ADON=1
+            переводить АЦП зі стану &quot;вимкнено&quot; у стан &quot;готовий.&quot;АЦП потребує
+            часу на стабілізацію (~1 мкс), тому в реальному коді перед першим перетворенням бажано
+            зробити невелику затримку або виконати перший &quot;dummy&quot; запуск.{' '}
+            <RmRef section="11.12.3" page={247} label="RM0008 §11.12.3 CR2" />
+          </p>
+        </ExplanationSection>
+
+        <ExplanationSection title="Крок 4 — SQR3: який канал вимірювати">
+          <p>
+            STM32 ADC підтримує <strong>regular sequence</strong> — послідовність з до 16 каналів,
+            що перетворюються один за одним. Регістр <strong>SQR3</strong> (Sequence Register 3)
+            задає, який канал буде <em>першим</em> у послідовності. Просто пишемо номер каналу: SQR3
+            = 1 означає &quot;почати з каналу 1 (PA1)&quot;. Якщо потрібно лише один вимір — більше
+            нічого не налаштовуємо.{' '}
+            <RmRef section="11.12.11" page={255} label="RM0008 §11.12.11 SQR3" />
+          </p>
+        </ExplanationSection>
+
+        <ExplanationSection title="Крок 5 — SMPR: час вибірки (sampling time)">
+          <p>
+            Перед тим як &quot;сфотографувати&quot; напругу, АЦП тримає конденсатор на вході
+            підключеним до піна певний час — це <strong>час вибірки</strong>. Чим довше він стоїть —
+            тим точніше заряджається конденсатор, особливо при високоімпедансних (слабких) джерелах
+            сигналу.
+          </p>
+          <p>
+            Для джерел з низьким вихідним імпедансом (до ~1 кОм) достатньо 1.5 циклів. Для датчиків
+            з більшим опором — потрібно 28.5–239.5 циклів. На екзамені без конкретних умов —
+            безпечно вибирати <strong>239.5 циклів</strong>. Загальний час перетворення = час
+            вибірки + 12.5 циклів.{' '}
+            <RmRef section="11.12.4" page={249} label="RM0008 §11.12.4 SMPR" />
+          </p>
+        </ExplanationSection>
+
+        <ExplanationSection title="Крок 6 — Software trigger і запуск">
+          <p>
+            АЦП не запускається &quot;просто так&quot; — йому потрібен тригер. STM32 підтримує
+            зовнішні тригери від таймерів, але найпростіший варіант — software trigger.{' '}
+            <strong>EXTSEL=111</strong> вибирає SWSTART як тригер. <strong>EXTTRIG</strong> дозволяє
+            зовнішній тригер (навіть якщо він програмний). <strong>SWSTART</strong> — безпосередній
+            старт. Після запуску чекаємо прапорець <strong>EOC (End Of Conversion)</strong> у
+            регістрі SR, потім читаємо результат з DR. <RmRef section="11.12.3" page={247} />
+          </p>
+        </ExplanationSection>
+      </ExplanationPanel>
     </div>
   );
 }
@@ -292,6 +436,69 @@ export function Task85UARTTx() {
       </NoteBadge>
 
       <CodeDisplay code={code} title={`${entry?.usart} TX → ${pin}`} />
+
+      <ExplanationPanel>
+        <ExplanationSection title="Що таке UART і для чого він потрібен">
+          <p>
+            UART (Universal Asynchronous Receiver-Transmitter) — це один з найстаріших і
+            найпростіших протоколів послідовної передачі даних. &quot;Послідовний&quot; означає, що
+            біти передаються один за одним по одному дроту. &quot;Асинхронний&quot; — немає окремого
+            дроту для тактового сигналу; обидві сторони мають заздалегідь домовитися про швидкість
+            (baudrate).
+          </p>
+          <p>
+            UART ідеально підходить для налагодження (вивести текст через термінал), для
+            зв&apos;язку з GPS-модулями, Bluetooth-модулями, і взагалі будь-де де не потрібна висока
+            швидкість. <RmRef section="27" page={788} label="RM0008 §27 USART" />
+          </p>
+        </ExplanationSection>
+
+        <ExplanationSection title="TX пін — чому AF push-pull і 50 МГц">
+          <p>
+            Пін TX є <em>виходом</em> периферії USART. Тому його налаштовуємо як{' '}
+            <strong>Alternate Function Push-pull (CNF=10, MODE=11)</strong>. Push-pull — щоб активно
+            видавати і HIGH і LOW. 50 МГц швидкість — щоб фронти сигналу були чіткими навіть на
+            високих baudrate.
+          </p>
+          <p>
+            Якби ми налаштували пін як звичайний GPIO output, USART все одно не зможе ним керувати —
+            USART &quot;підключається&quot; до піна тільки в режимі AF. Звідси і потрібен AFIO
+            clock.
+          </p>
+        </ExplanationSection>
+
+        <ExplanationSection title="BRR — як обчислюється швидкість передачі">
+          <p>
+            Baudrate (швидкість у бітах/с) визначається регістром <strong>BRR</strong> (Baud Rate
+            Register). Формула дуже проста:{' '}
+            <code className="rounded bg-slate-800 px-1 text-pink-300">BRR = f_PCLK / baudrate</code>
+            . Наприклад, USART1 на APB2 з частотою 8 МГц і baudrate 9600:
+          </p>
+          <p className="rounded border border-slate-700 bg-slate-900 p-3 font-mono text-xs text-slate-300">
+            BRR = 8&nbsp;000&nbsp;000 / 9600 = 833
+          </p>
+          <p>
+            В коді ми пишемо саме вираз <code>8000000 / 9600</code> а не &quot;магічне число&quot;
+            833 — так одразу зрозуміло звідки це число взялося, і при зміні частоти компілятор
+            автоматично перерахує. Увага: USART1 — на APB2, USART2/3 — на APB1! Якщо переплутати
+            частоту шини — baudrate буде неправильним.{' '}
+            <RmRef section="27.6.3" page={823} label="RM0008 §27.6.3 BRR" />
+          </p>
+        </ExplanationSection>
+
+        <ExplanationSection title="TE і UE — два кроки вмикання USART">
+          <p>
+            <strong>TE (Transmitter Enable)</strong> — вмикає блок передавача. Без нього USART
+            нічого не передає, навіть якщо все інше налаштоване вірно.
+          </p>
+          <p>
+            <strong>UE (USART Enable)</strong> — глобальне вмикання всього USART-блоку. Без нього
+            будь-який запис у TDR (Transmit Data Register) просто ігнорується. Порядок важливий:
+            спочатку TE, потім UE — хоча на практиці часто роблять навпаки або одночасно, і це теж
+            працює. <RmRef section="27.6.4" page={825} label="RM0008 §27.6.4 CR1" />
+          </p>
+        </ExplanationSection>
+      </ExplanationPanel>
     </div>
   );
 }
@@ -366,6 +573,78 @@ export function Task85EXTI() {
       </NoteBadge>
 
       <CodeDisplay code={code} title={`EXTI ${pin}`} />
+
+      <ExplanationPanel>
+        <ExplanationSection title="Що таке EXTI — зовнішні переривання">
+          <p>
+            EXTI (External Interrupt/Event) — це механізм, що дозволяє МК реагувати на зміну сигналу
+            на пін <em>автоматично</em>, не тратячи час процесора на постійну перевірку. Уявіть: є
+            кнопка. Замість того щоб у циклі кожну мілісекунду питати &quot;чи натиснута
+            кнопка?&quot;, ми кажемо МК: &quot;коли побачиш зміну на цьому пін — перервися і виклич
+            мою функцію&quot;. Це і є переривання.{' '}
+            <RmRef section="10" page={197} label="RM0008 §10 EXTI" />
+          </p>
+        </ExplanationSection>
+
+        <ExplanationSection title="Крок 3 — AFIO EXTICR: маршрутизація порту до лінії EXTI">
+          <p>
+            STM32 має 16 ліній EXTI (0–15), але портів GPIO є кілька (A, B, C...). Лінія EXTI0 може
+            бути підключена до PA0, PB0, PC0 — але лише до одного одночасно. Вибір виконується через
+            регістри <strong>AFIO→EXTICR[0..3]</strong>. EXTICR[0] керує EXTI0–3, EXTICR[1] —
+            EXTI4–7, і т.д. Для кожної лінії є 4-бітне поле: 0000=PortA, 0001=PortB, 0010=PortC...{' '}
+            <RmRef section="9.4.3" page={184} label="RM0008 §9.4.3 EXTICR" />
+          </p>
+        </ExplanationSection>
+
+        <ExplanationSection title="Крок 4 — RTSR / FTSR: фронт тригера">
+          <p>
+            EXTI може спрацьовувати за <strong>наростаючим фронтом</strong> (0→1, RTSR — Rising
+            Trigger Selection Register), за <strong>спадаючим фронтом</strong> (1→0, FTSR — Falling
+            Trigger Selection Register), або за обома. Наприклад, кнопка з підтяжкою до VCC дає LOW
+            при натисканні — треба FTSR. LED-кнопка без підтяжки — RTSR.{' '}
+            <RmRef section="10.3.2" page={211} label="RM0008 §10.3.2 RTSR" />
+          </p>
+        </ExplanationSection>
+
+        <ExplanationSection title="Крок 5 — IMR: розмаскування переривання">
+          <p>
+            <strong>IMR (Interrupt Mask Register)</strong> — це &quot;воротар&quot;. Навіть якщо
+            налаштовані RTSR/FTSR і AFIO, сигнал не пройде до NVIC, поки відповідний біт у IMR не
+            встановлений. Встановити біт IMR означає &quot;дозволити цій лінії EXTI генерувати
+            переривання&quot;. Аналогічно є EMR (Event Mask Register) — для event mode без
+            переривань. <RmRef section="10.3.4" page={213} label="RM0008 §10.3.4 IMR" />
+          </p>
+        </ExplanationSection>
+
+        <ExplanationSection title="PR — прапорець скидається записом 1, а не 0!">
+          <p>
+            Це класична пастка. Регістр <strong>PR (Pending Register)</strong> показує, яка лінія
+            EXTI спрацювала. В обробнику переривання ми повинні скинути цей прапорець — інакше МК
+            одразу ж зайде в ISR знову і знову.
+          </p>
+          <p>
+            Але на відміну від звичайних регістрів (де для скидання пишемо 0), тут все навпаки:{' '}
+            <strong>щоб скинути PR, треба записати 1 у відповідний біт</strong>. Це
+            &quot;write-1-to-clear&quot; механізм. Тому в коді:{' '}
+            <code className="rounded bg-slate-800 px-1 text-orange-300">
+              EXTI-&gt;PR = EXTI_PR_PR13;
+            </code>{' '}
+            (не |=, не &=~, а просте присвоєння). Якщо написати &= ~, це не скине прапорець — бо ми
+            запишемо 0, а потрібна 1.{' '}
+            <RmRef section="10.3.6" page={214} label="RM0008 §10.3.6 PR" />
+          </p>
+        </ExplanationSection>
+
+        <ExplanationSection title="EXTI0–4 vs EXTI9_5 vs EXTI15_10 — спільні IRQ">
+          <p>
+            Через обмежену кількість векторів переривань у NVIC, лінії EXTI5–9 спільно
+            використовують один вектор <strong>EXTI9_5_IRQn</strong>, а EXTI10–15 —{' '}
+            <strong>EXTI15_10_IRQn</strong>. Це означає: якщо у вас кілька кнопок на EXTI5 і EXTI7 —
+            вони обидві викличуть один і той самий ISR. Усередині ISR треба перевіряти, який саме
+            прапорець PR встановлений, і обробляти відповідно.
+          </p>
+        </ExplanationSection>
+      </ExplanationPanel>
     </div>
   );
 }
