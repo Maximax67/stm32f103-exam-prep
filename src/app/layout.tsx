@@ -3,6 +3,8 @@ import './globals.css';
 import type { Metadata } from 'next';
 import { IBM_Plex_Sans, JetBrains_Mono } from 'next/font/google';
 
+import { PdfViewerProvider } from '@/components/PdfViewerProvider';
+
 const BASE_URL =
   process.env.NODE_ENV === 'production'
     ? 'https://maximax67.github.io/stm32f103-exam-prep/'
@@ -73,7 +75,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <link rel="apple-touch-icon" href={`${ICONS_PREFIX}/apple-touch-icon.png`} />
       </head>
       <body className={`${ibmPlexSans.variable} ${jetbrainsMono.variable} antialiased`}>
-        {children}
+        <PdfViewerProvider>{children}</PdfViewerProvider>
       </body>
     </html>
   );

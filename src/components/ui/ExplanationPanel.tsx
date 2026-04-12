@@ -3,6 +3,8 @@
 import { BookOpen, ChevronDown, ExternalLink } from 'lucide-react';
 import React, { useState } from 'react';
 
+import { usePdfViewer } from '@/context/PdfViewerContext';
+
 // ─── RM Reference badge ───────────────────────────────────────────────────────
 
 interface RmRefProps {
@@ -12,12 +14,18 @@ interface RmRefProps {
 }
 
 export function RmRef({ section, page, label }: RmRefProps) {
+  const { openPdf } = usePdfViewer();
+
   return (
-    <span className="inline-flex items-center gap-1 rounded border border-violet-500/30 bg-violet-500/10 px-1.5 py-0.5 font-mono text-[10px] text-violet-300">
+    <button
+      onClick={() => openPdf(page ?? 1)}
+      title={page ? `Відкрити RM0008, с. ${page}` : 'Відкрити RM0008'}
+      className="inline-flex cursor-pointer items-center gap-1 rounded border border-violet-500/30 bg-violet-500/10 px-1.5 py-0.5 font-mono text-[10px] text-violet-300 transition-colors hover:border-violet-400/60 hover:bg-violet-500/20 hover:text-violet-200"
+    >
       <ExternalLink size={9} />
       {label ?? `RM0008 §${section}`}
       {page ? `, с. ${page}` : ''}
-    </span>
+    </button>
   );
 }
 

@@ -3,6 +3,7 @@
 import {
   Activity,
   ArrowLeft,
+  BookOpen,
   ChevronRight,
   Cpu,
   Radio,
@@ -24,6 +25,7 @@ import {
   Task100UARTRx,
 } from '@/components/tasks/Tasks100';
 import { VisitorCounter } from '@/components/VisitorCounter';
+import { usePdfViewer } from '@/context/PdfViewerContext';
 
 type Tier = 60 | 85 | 100;
 
@@ -183,6 +185,7 @@ const TIER_CFG = {
 export default function Home() {
   const [tier, setTier] = useState<Tier | null>(null);
   const [taskId, setTaskId] = useState<string | null>(null);
+  const { openPdf } = usePdfViewer();
 
   const tasks = tier ? TASKS[tier] : [];
   const cfg = tier ? TIER_CFG[tier] : null;
@@ -213,27 +216,15 @@ export default function Home() {
             <span className="block font-mono text-sm font-bold text-slate-100">STM32F103</span>
           </button>
 
-          {/* Breadcrumb */}
+          {/* Center: breadcrumb */}
           <nav className="flex items-center gap-1.5 font-mono text-xs text-slate-700">
-            <button
-              onClick={() => {
-                setTier(null);
-                setTaskId(null);
-              }}
-              className="transition-colors hover:text-slate-400"
-            >
-              оцінка
-            </button>
             {tier && (
-              <>
-                <ChevronRight size={12} className="text-slate-800" />
-                <button
-                  onClick={() => setTaskId(null)}
-                  className={`${cfg?.text} transition-opacity hover:opacity-70`}
-                >
-                  {tier}б
-                </button>
-              </>
+              <button
+                onClick={() => setTaskId(null)}
+                className={`${cfg?.text} transition-opacity hover:opacity-70`}
+              >
+                {tier}б
+              </button>
             )}
             {selTask && (
               <>
@@ -242,6 +233,15 @@ export default function Home() {
               </>
             )}
           </nav>
+
+          {/* Right: RM0008 button */}
+          <button
+            onClick={() => openPdf()}
+            className="flex items-center gap-1.5 rounded-lg border border-violet-500/25 bg-violet-500/8 px-3 py-1.5 font-mono text-xs text-violet-400 transition-all hover:border-violet-500/50 hover:bg-violet-500/14 hover:text-violet-300"
+          >
+            <BookOpen size={13} />
+            <span className="hidden sm:inline">RM0008</span>
+          </button>
         </div>
       </header>
 
