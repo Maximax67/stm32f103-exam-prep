@@ -38,6 +38,7 @@ export function Task100PWM() {
   const [psc, setPsc] = useState(7999);
   const [arr, setArr] = useState(999);
   const [clockMhz, setClockMhz] = useState(8);
+  const [pwmMode, setPwmMode] = useState<1 | 2>(1);
 
   const mapping = getPwmMapping(pin);
   const ccr = Math.round((duty / 100) * (arr + 1));
@@ -46,8 +47,13 @@ export function Task100PWM() {
     return f >= 1 ? `${f.toFixed(2)} Гц` : `${(f * 1000).toFixed(2)} мГц`;
   }, [clockMhz, psc, arr]);
 
-  const code = generatePwm({ pin, dutyCyclePct: duty, psc, arr, clockMhz });
+  const code = generatePwm({ pin, dutyCyclePct: duty, psc, arr, clockMhz, pwmMode });
   const isAdvancedTimer = mapping?.timer === 'TIM1';
+
+  const modeDesc =
+    pwmMode === 1
+      ? 'HIGH поки CNT < CCR, LOW коли CNT ≥ CCR'
+      : 'LOW поки CNT < CCR, HIGH коли CNT ≥ CCR';
 
   return (
     <div className="space-y-4">
@@ -66,6 +72,16 @@ export function Task100PWM() {
           value={String(clockMhz)}
           onChange={(v) => setClockMhz(Number(v))}
           options={COMMON_CLOCKS_MHZ.map((c) => ({ value: String(c), label: `${c} МГц` }))}
+        />
+        <Select
+          label="Режим PWM (OCxM)"
+          value={String(pwmMode)}
+          onChange={(v) => setPwmMode(Number(v) as 1 | 2)}
+          options={[
+            { value: '1', label: 'Mode 1 (OCxM=110) — HIGH поки CNT < CCR' },
+            { value: '2', label: 'Mode 2 (OCxM=111) — HIGH поки CNT ≥ CCR' },
+          ]}
+          hint="Mode 1 найпоширеніший"
         />
         <NumberInput
           label="PSC"
@@ -95,15 +111,22 @@ export function Task100PWM() {
       )}
 
       <InfoBadge>
-        f_PWM ≈ <strong>{fPwm}</strong> · CCR = {ccr} / {arr + 1} = {duty}% · {mapping?.timer} CH
-        {mapping?.channel}{' '}
-        {mapping?.needsBDTR ? '(TIM1: потрібен BDTR→MOE!)' : '(general-purpose, без BDTR)'}
+        f_PWM ~= <strong>{fPwm}</strong> · CCR = {ccr} / {arr + 1} = {duty}% · {mapping?.timer} CH
+        {mapping?.channel} · <strong>Mode {pwmMode}:</strong> {modeDesc}
+        {mapping?.needsBDTR ? ' · TIM1: потрібен BDTR→MOE!' : ''}
       </InfoBadge>
 
       <NoteBadge>
         <strong>PWM Mode 1 (OCxM=110)</strong>: вихід HIGH, поки CNT &lt; CCR; LOW після. EGR→UG
         примусово завантажує значення PSC/ARR/CCR з preload регістрів — без UG перші значення можуть
         бути некоректними. OCxPE (preload enable) дозволяє безпечне оновлення CCR під час роботи.
+      </NoteBadge>
+
+      <NoteBadge>
+        <strong>PWM Mode 1</strong> (OCxM=110): HIGH поки CNT &lt; CCR. <strong>Mode 2</strong>{' '}
+        (OCxM=111): HIGH коли CNT ≥ CCR — інверсія. Обидва дають однаковий duty cycle, але
+        полярність виходу протилежна. EGR→UG примусово завантажує PSC/ARR/CCR з preload регістрів
+        перед стартом.
       </NoteBadge>
 
       <CodeDisplay code={code} title={`PWM ${pin} → ${mapping?.timer} CH${mapping?.channel}`} />
@@ -120,6 +143,25 @@ export function Task100PWM() {
             половину напруги живлення. 10% duty — ніби 10% напруги. Так керують яскравістю LED,
             швидкістю моторів, нагрівом тощо. Людське вухо/око не помічає швидких перемикань і
             сприймає &quot;середнє&quot; значення.{' '}
+            <RmRef section="15.3.9" page={372} label="RM0008 §15.3.9 PWM mode" />
+          </p>
+        </ExplanationSection>
+
+        <ExplanationSection title="PWM Mode 1 vs Mode 2 — у чому різниця">
+          <p>
+            Обидва режими генерують PWM, але з різною полярністю. Поле <strong>OCxM</strong> у
+            регістрі CCMR вибирає режим:
+          </p>
+          <p className="rounded border border-slate-700 bg-slate-900 p-3 font-mono text-xs leading-6 text-slate-300">
+            OCxM = 110 → Mode 1: HIGH поки CNT &lt; CCR, LOW після
+            <br />
+            OCxM = 111 → Mode 2: LOW поки CNT &lt; CCR, HIGH після
+          </p>
+          <p>
+            Практично: якщо duty=30% у Mode 1 → вихід HIGH 30% часу. У Mode 2 із тим самим CCR →
+            HIGH 70% часу. Вибір залежить від того, який рівень сигналу вважається
+            &quot;активним&quot; для вашого навантаження. Для LED і моторів зазвичай Mode 1 і duty
+            вказує скільки &quot;ON&quot;.{' '}
             <RmRef section="15.3.9" page={372} label="RM0008 §15.3.9 PWM mode" />
           </p>
         </ExplanationSection>
@@ -341,6 +383,9 @@ export function Task100TimerIRQ() {
   const [arr, setArr] = useState(999);
   const [clockMhz, setClockMhz] = useState(8);
 
+  const selectedTimer = TIMERS.find((t) => t.name === timer)!;
+  const isAdvanced = selectedTimer.apb === 2;
+
   const fOut = useMemo(() => {
     const f = (clockMhz * 1_000_000) / ((psc + 1) * (arr + 1));
     return f >= 1 ? `${f.toFixed(3)} Гц` : `${(f * 1000).toFixed(3)} мГц`;
@@ -355,7 +400,10 @@ export function Task100TimerIRQ() {
           label="Таймер"
           value={timer}
           onChange={setTimer}
-          options={TIMERS.map((t) => ({ value: t.name, label: t.name }))}
+          options={TIMERS.map((t) => ({
+            value: t.name,
+            label: `${t.name}${t.apb === 2 ? ' (APB2 — advanced)' : ' (APB1)'}`,
+          }))}
         />
         <Select
           label="Тактова частота (МГц)"
@@ -380,6 +428,15 @@ export function Task100TimerIRQ() {
           hint={`÷${arr + 1}`}
         />
       </FormGrid>
+
+      {isAdvanced && (
+        <WarningBadge>
+          <strong>TIM1 — Advanced-Control Timer!</strong> Update interrupt використовує вектор{' '}
+          <strong>TIM1_UP_IRQn</strong> і ISR <strong>TIM1_UP_IRQHandler</strong> — не{' '}
+          <code className="rounded bg-slate-700 px-1">TIM1_IRQHandler</code>! TIM1 має чотири окремі
+          вектори: TIM1_BRK, TIM1_UP, TIM1_TRG_COM, TIM1_CC. Тактується від <strong>APB2</strong>.
+        </WarningBadge>
+      )}
 
       <InfoBadge>
         Переривання кожні ≈ <strong>1 / {fOut}</strong> (Update Event = переповнення лічильника

@@ -11,8 +11,10 @@ import {
 } from '@/lib/generators/peripherals';
 import {
   ADC_CAPABLE_PINS,
+  ALL_GPIO_PINS,
   COMMON_BAUDRATES,
   COMMON_CLOCKS_MHZ,
+  TIMERS,
   UART_TX_PINS,
 } from '@/lib/pinUtils';
 
@@ -27,15 +29,31 @@ import {
   WarningBadge,
 } from '../ui/FormInputs';
 
-// ─── TIM Setup ────────────────────────────────────────────────────────────────
+// ─── Shared port-availability warnings ────────────────────────────────────────
 
-const TIMERS_85 = ['TIM2', 'TIM3', 'TIM4'];
+const STM32T6_LIMITED_PORTS: Record<string, string> = {
+  C: 'STM32F103T6 (36-пін): GPIOC має лише PC13–PC15. PC0–PC12 — відсутні на цьому корпусі.',
+  D: 'STM32F103T6 (36-пін): GPIOD має лише PD0–PD1 (OSC). PD2–PD15 — відсутні.',
+};
+
+function getPortWarning(pin: string): string | null {
+  const port = pin[1];
+  const num = parseInt(pin.slice(2));
+  if (port === 'C' && num < 13) return STM32T6_LIMITED_PORTS['C'];
+  if (port === 'D' && num > 1) return STM32T6_LIMITED_PORTS['D'];
+  return null;
+}
+
+// ─── TIM Setup ────────────────────────────────────────────────────────────────
 
 export function Task85Timer() {
   const [timer, setTimer] = useState('TIM3');
   const [psc, setPsc] = useState(7999);
   const [arr, setArr] = useState(999);
   const [clockMhz, setClockMhz] = useState(8);
+
+  const selectedTimer = TIMERS.find((t) => t.name === timer)!;
+  const isAdvanced = selectedTimer.apb === 2;
 
   const fOut = useMemo(() => {
     const f = (clockMhz * 1_000_000) / ((psc + 1) * (arr + 1));
@@ -55,11 +73,13 @@ export function Task85Timer() {
           label="Таймер"
           value={timer}
           onChange={setTimer}
-          options={TIMERS_85.map((t) => ({ value: t, label: t }))}
-          hint="TIM2–TIM4 на шині APB1"
+          options={TIMERS.map((t) => ({
+            value: t.name,
+            label: `${t.name}${t.apb === 2 ? ' (APB2 — advanced)' : ' (APB1)'}`,
+          }))}
         />
         <Select
-          label="Тактова частота APB (МГц)"
+          label="Тактова частота таймера (МГц)"
           value={String(clockMhz)}
           onChange={(v) => setClockMhz(Number(v))}
           options={COMMON_CLOCKS_MHZ.map((c) => ({ value: String(c), label: `${c} МГц` }))}
@@ -79,21 +99,31 @@ export function Task85Timer() {
           onChange={setArr}
           min={0}
           max={65535}
-          hint={`÷${arr + 1} → f_out ≈ ${fOut}`}
+          hint={`÷${arr + 1} → f_out ~= ${fOut}`}
         />
       </FormGrid>
+
+      {isAdvanced && (
+        <WarningBadge>
+          <strong>TIM1 — Advanced-Control Timer на шині APB2!</strong> Тактується від APB2 (разом з
+          GPIO, USART1, ADC). Для PWM потрібен BDTR MOE, але для базового підрахунку — лише
+          RCC_APB2ENR_TIM1EN. IRQ Update = <strong>TIM1_UP_IRQn</strong>, ISR ={' '}
+          <strong>TIM1_UP_IRQHandler</strong>.
+        </WarningBadge>
+      )}
 
       <InfoBadge>
         <strong>f_out = f_clk ÷ (PSC+1) ÷ (ARR+1) ≈ {fOut}</strong> · Лічильник рахує 0 → ARR, потім
         скидається (Update Event). PSC і ARR — 16-бітні (0–65535).
       </InfoBadge>
 
-      <NoteBadge>
-        <strong>TIM2–TIM4</strong> — general-purpose таймери на шині <strong>APB1</strong>. Якщо
-        APB1 prescaler ≠ 1 (наприклад, при 72 МГц SYSCLK та APB1÷2=36 МГц), таймери отримують
-        подвоєну частоту APB1 = 72 МГц. У цьому тренажері вкажіть реальну частоту таймера, а не
-        APB1.
-      </NoteBadge>
+      {!isAdvanced && (
+        <NoteBadge>
+          <strong>TIM2–TIM4</strong> — general-purpose таймери на шині <strong>APB1</strong>. Якщо
+          APB1 prescaler ≠ 1 (наприклад, при 72 МГц SYSCLK та APB1÷2=36 МГц), таймери отримують
+          подвоєну частоту APB1 = 72 МГц. Вкажіть реальну частоту таймера.
+        </NoteBadge>
+      )}
 
       <CodeDisplay code={code} title={`${timer} SETUP`} />
 
@@ -229,7 +259,7 @@ export function Task85ADC() {
 
   const pcWarning =
     pin.startsWith('PC') && parseInt(pin.slice(2)) < 13
-      ? `ADC CH${ch} (${pin}): GPIOC PC0–PC12 відсутні на STM32F103T6. Для ADC краще використовувати PA0–PA7 або PB0–PB1.`
+      ? `ADC CH${ch} (${pin}): GPIOC PC0–PC12 відсутні на STM32F103T6. Для ADC краще використовуйте PA0–PA7 або PB0–PB1.`
       : null;
 
   return (
@@ -414,8 +444,8 @@ export function Task85UARTTx() {
 
       {entry?.remap && (
         <WarningBadge>
-          Пін {pin} потребує <strong>remap</strong> через AFIO_MAPR — {entry.usart} не на
-          стандартних пінах. Код включає увімкнення remap та AFIO clock.
+          Пін {pin} потребує <strong>remap</strong> через AFIO_MAPR ({entry.remapComment}). Код
+          включає увімкнення remap та AFIO clock.
         </WarningBadge>
       )}
 
@@ -424,8 +454,7 @@ export function Task85UARTTx() {
           <strong>
             BRR = {clockMhz} МГц × 10⁶ ÷ {actualBaud} = {brr}
           </strong>{' '}
-          · {entry.usart} на APB{entry.apb} · TX пін → AF push-pull (MODE=11, CNF=10) · Без
-          увімкнення TE та UE — USART не передаватиме даних.
+          · {entry.usart} на APB{entry.apb} · TX → AF push-pull (MODE=11, CNF=10) · TE + UE.
         </InfoBadge>
       )}
 
@@ -435,7 +464,7 @@ export function Task85UARTTx() {
         реальній частоті тієї шини, до якої підключений обраний USART.
       </NoteBadge>
 
-      <CodeDisplay code={code} title={`${entry?.usart} TX → ${pin}`} />
+      <CodeDisplay code={code} title={`${entry?.usart} TX -> ${pin}`} />
 
       <ExplanationPanel>
         <ExplanationSection title="Що таке UART і для чого він потрібен">
@@ -505,20 +534,9 @@ export function Task85UARTTx() {
 
 // ─── EXTI ─────────────────────────────────────────────────────────────────────
 
-const EXTI_PINS = [
-  'PA0',
-  'PA1',
-  'PA4',
-  'PA5',
-  'PA8',
-  'PA9',
-  'PB0',
-  'PB1',
-  'PB5',
-  'PB12',
-  'PC13',
-  'PC14',
-];
+// All GPIO pins can be used as EXTI sources — the AFIO EXTICR routes any port
+// to any EXTI line. Constraint: only one port per line at a time (e.g. EXTI0
+// can be PA0 OR PB0 OR PC0, but not two simultaneously).
 
 export function Task85EXTI() {
   const [pin, setPin] = useState('PC13');
@@ -526,10 +544,11 @@ export function Task85EXTI() {
 
   const code = generateExti({ pin, edge });
   const pinNum = parseInt(pin.slice(2));
+  const portWarning = getPortWarning(pin);
 
   const irqGroup =
     pinNum <= 4
-      ? `EXTI${pinNum}_IRQn (окремий)`
+      ? `EXTI${pinNum}_IRQn (окремий вектор)`
       : pinNum <= 9
         ? 'EXTI9_5_IRQn (спільний для EXTI5–9)'
         : 'EXTI15_10_IRQn (спільний для EXTI10–15)';
@@ -547,7 +566,7 @@ export function Task85EXTI() {
           label="Пін переривання"
           value={pin}
           onChange={setPin}
-          options={EXTI_PINS.map((p) => ({ value: p, label: p }))}
+          options={ALL_GPIO_PINS.map((p) => ({ value: p, label: p }))}
           hint="Кожна EXTI-лінія 0–15 = лише один порт"
         />
         <Select
@@ -557,6 +576,8 @@ export function Task85EXTI() {
           options={Object.entries(edgeLabels).map(([v, l]) => ({ value: v, label: l }))}
         />
       </FormGrid>
+
+      {portWarning && <WarningBadge>{portWarning}</WarningBadge>}
 
       <InfoBadge>
         <strong>

@@ -34,22 +34,10 @@ export function cnfMask(p: PinInfo, suffix = ''): string {
 }
 
 // ─── JTAG / SWD pin detection ─────────────────────────────────────────────────
-// STM32F103 default SWJ (Serial Wire JTAG) mapping:
-//   PA13 = JTMS / SWDIO   ← SWD pin, DO NOT free without losing debug!
-//   PA14 = JTCK / SWCLK   ← SWD pin, DO NOT free without losing debug!
-//   PA15 = JTDI            ← JTAG only, can be freed with JTAGDISABLE
-//   PB3  = JTDO / SWO      ← JTAG only (SWO trace), can be freed with JTAGDISABLE
-//   PB4  = NJTRST          ← JTAG only, can be freed with JTAGDISABLE
-//
-// To free PA15 / PB3 / PB4: AFIO->MAPR |= AFIO_MAPR_SWJ_CFG_JTAGDISABLE  (safe, keeps SWD)
-// To free PA13 / PA14:      AFIO->MAPR |= AFIO_MAPR_SWJ_CFG_DISABLE       (loses debug!)
-// Reference: RM0008 Section 9.3.1, Table 5 "SWJ port pin assignment"
-
 export type JtagPinKind = 'jtag_only' | 'swd';
 
 export interface JtagPinInfo {
   kind: JtagPinKind;
-  /** Alternate function name printed in the signal column of the datasheet */
   signalName: string;
 }
 
@@ -61,7 +49,6 @@ const JTAG_PIN_MAP: Record<string, JtagPinInfo> = {
   PB4: { kind: 'jtag_only', signalName: 'NJTRST' },
 };
 
-/** Returns JTAG metadata for a pin, or null if the pin is not JTAG/SWD-related. */
 export function getJtagInfo(pin: string): JtagPinInfo | null {
   return JTAG_PIN_MAP[pin] ?? null;
 }
@@ -76,7 +63,6 @@ export const ALL_GPIO_PINS: string[] = [
 ];
 
 // ─── ADC channel mapping ─────────────────────────────────────────────────────
-// STM32F103: channels 0–9 in SMPR2, channels 10–17 in SMPR1
 
 export const ADC_CHANNEL_MAP: Record<string, number> = {
   PA0: 0,
@@ -99,24 +85,22 @@ export const ADC_CHANNEL_MAP: Record<string, number> = {
 
 export const ADC_CAPABLE_PINS = Object.keys(ADC_CHANNEL_MAP);
 
-/** Returns which SMPR register to use (1 = SMPR1 for CH10+, 2 = SMPR2 for CH0-9) */
 export function adcSmprNum(ch: number): 1 | 2 {
   return ch >= 10 ? 1 : 2;
 }
 
 // ─── PWM pin → timer/channel mapping ─────────────────────────────────────────
-// STM32F103 default alternate function mapping (no remap unless noted)
 
 export interface PwmMapping {
-  timer: string; // 'TIM1', 'TIM2', ...
-  channel: number; // 1-4
-  needsBDTR: boolean; // only TIM1 (advanced timer)
+  timer: string;
+  channel: number;
+  needsBDTR: boolean;
   apbBus: 1 | 2;
-  ccmrReg: string; // 'CCMR1' (CH1,CH2) or 'CCMR2' (CH3,CH4)
-  ocmField: string; // e.g. 'OC1M', 'OC2M'
-  ocpeField: string; // e.g. 'OC1PE'
-  ccerBit: string; // e.g. 'CC1E'
-  ccrReg: string; // e.g. 'CCR1'
+  ccmrReg: string;
+  ocmField: string;
+  ocpeField: string;
+  ccerBit: string;
+  ccrReg: string;
   timerClock: string;
 }
 
@@ -148,7 +132,7 @@ export function getPwmMapping(pin: string): PwmMapping | null {
   const isAdv = timer === 'TIM1';
   const apb: 1 | 2 = isAdv ? 2 : 1;
   const ccmr = ch <= 2 ? 'CCMR1' : 'CCMR2';
-  const chInReg = ch <= 2 ? ch : ch - 2; // position within CCMR register
+  const chInReg = ch <= 2 ? ch : ch - 2;
   return {
     timer,
     channel: ch,
@@ -167,8 +151,10 @@ export function getPwmMapping(pin: string): PwmMapping | null {
 
 export interface UartPinEntry {
   pin: string;
-  usart: string; // 'USART1', 'USART2', 'USART3'
+  usart: string;
   remap: boolean;
+  remapMacro?: string; // AFIO_MAPR macro to set, e.g. 'AFIO_MAPR_USART1_REMAP'
+  remapComment?: string; // human-readable comment, e.g. 'TX→PB6, RX→PB7'
   apb: 1 | 2;
   clockBit: string;
   irqName: string;
@@ -176,6 +162,7 @@ export interface UartPinEntry {
 }
 
 export const UART_TX_PINS: UartPinEntry[] = [
+  // USART1
   {
     pin: 'PA9',
     usart: 'USART1',
@@ -189,11 +176,14 @@ export const UART_TX_PINS: UartPinEntry[] = [
     pin: 'PB6',
     usart: 'USART1',
     remap: true,
+    remapMacro: 'AFIO_MAPR_USART1_REMAP',
+    remapComment: 'TX→PB6, RX→PB7',
     apb: 2,
     clockBit: 'RCC_APB2ENR_USART1EN',
     irqName: 'USART1_IRQn',
     usartNum: 1,
   },
+  // USART2
   {
     pin: 'PA2',
     usart: 'USART2',
@@ -203,6 +193,18 @@ export const UART_TX_PINS: UartPinEntry[] = [
     irqName: 'USART2_IRQn',
     usartNum: 2,
   },
+  {
+    pin: 'PD5',
+    usart: 'USART2',
+    remap: true,
+    remapMacro: 'AFIO_MAPR_USART2_REMAP',
+    remapComment: 'TX→PD5, RX→PD6',
+    apb: 1,
+    clockBit: 'RCC_APB1ENR_USART2EN',
+    irqName: 'USART2_IRQn',
+    usartNum: 2,
+  },
+  // USART3
   {
     pin: 'PB10',
     usart: 'USART3',
@@ -216,15 +218,19 @@ export const UART_TX_PINS: UartPinEntry[] = [
     pin: 'PC10',
     usart: 'USART3',
     remap: true,
+    remapMacro: 'AFIO_MAPR_USART3_REMAP_PARTIALREMAP',
+    remapComment: 'TX→PC10, RX→PC11 (partial remap)',
     apb: 1,
     clockBit: 'RCC_APB1ENR_USART3EN',
     irqName: 'USART3_IRQn',
     usartNum: 3,
   },
   {
-    pin: 'PB9',
+    pin: 'PD8',
     usart: 'USART3',
     remap: true,
+    remapMacro: 'AFIO_MAPR_USART3_REMAP_FULLREMAP',
+    remapComment: 'TX→PD8, RX→PD9 (full remap)',
     apb: 1,
     clockBit: 'RCC_APB1ENR_USART3EN',
     irqName: 'USART3_IRQn',
@@ -233,6 +239,7 @@ export const UART_TX_PINS: UartPinEntry[] = [
 ];
 
 export const UART_RX_PINS: UartPinEntry[] = [
+  // USART1
   {
     pin: 'PA10',
     usart: 'USART1',
@@ -246,11 +253,14 @@ export const UART_RX_PINS: UartPinEntry[] = [
     pin: 'PB7',
     usart: 'USART1',
     remap: true,
+    remapMacro: 'AFIO_MAPR_USART1_REMAP',
+    remapComment: 'TX→PB6, RX→PB7',
     apb: 2,
     clockBit: 'RCC_APB2ENR_USART1EN',
     irqName: 'USART1_IRQn',
     usartNum: 1,
   },
+  // USART2
   {
     pin: 'PA3',
     usart: 'USART2',
@@ -260,6 +270,18 @@ export const UART_RX_PINS: UartPinEntry[] = [
     irqName: 'USART2_IRQn',
     usartNum: 2,
   },
+  {
+    pin: 'PD6',
+    usart: 'USART2',
+    remap: true,
+    remapMacro: 'AFIO_MAPR_USART2_REMAP',
+    remapComment: 'TX→PD5, RX→PD6',
+    apb: 1,
+    clockBit: 'RCC_APB1ENR_USART2EN',
+    irqName: 'USART2_IRQn',
+    usartNum: 2,
+  },
+  // USART3
   {
     pin: 'PB11',
     usart: 'USART3',
@@ -273,6 +295,19 @@ export const UART_RX_PINS: UartPinEntry[] = [
     pin: 'PC11',
     usart: 'USART3',
     remap: true,
+    remapMacro: 'AFIO_MAPR_USART3_REMAP_PARTIALREMAP',
+    remapComment: 'TX→PC10, RX→PC11 (partial remap)',
+    apb: 1,
+    clockBit: 'RCC_APB1ENR_USART3EN',
+    irqName: 'USART3_IRQn',
+    usartNum: 3,
+  },
+  {
+    pin: 'PD9',
+    usart: 'USART3',
+    remap: true,
+    remapMacro: 'AFIO_MAPR_USART3_REMAP_FULLREMAP',
+    remapComment: 'TX→PD8, RX→PD9 (full remap)',
     apb: 1,
     clockBit: 'RCC_APB1ENR_USART3EN',
     irqName: 'USART3_IRQn',
@@ -283,20 +318,46 @@ export const UART_RX_PINS: UartPinEntry[] = [
 // ─── Timer info ───────────────────────────────────────────────────────────────
 
 export interface TimerInfo {
-  name: string; // 'TIM2'
+  name: string;
   apb: 1 | 2;
   clockBit: string;
   irqName: string;
+  /** ISR function name — TIM1 update uses TIM1_UP_IRQHandler, others TIMx_IRQHandler */
+  isrName: string;
 }
 
 export const TIMERS: TimerInfo[] = [
-  { name: 'TIM2', apb: 1, clockBit: 'RCC_APB1ENR_TIM2EN', irqName: 'TIM2_IRQn' },
-  { name: 'TIM3', apb: 1, clockBit: 'RCC_APB1ENR_TIM3EN', irqName: 'TIM3_IRQn' },
-  { name: 'TIM4', apb: 1, clockBit: 'RCC_APB1ENR_TIM4EN', irqName: 'TIM4_IRQn' },
+  {
+    name: 'TIM1',
+    apb: 2,
+    clockBit: 'RCC_APB2ENR_TIM1EN',
+    irqName: 'TIM1_UP_IRQn',
+    isrName: 'TIM1_UP_IRQHandler',
+  },
+  {
+    name: 'TIM2',
+    apb: 1,
+    clockBit: 'RCC_APB1ENR_TIM2EN',
+    irqName: 'TIM2_IRQn',
+    isrName: 'TIM2_IRQHandler',
+  },
+  {
+    name: 'TIM3',
+    apb: 1,
+    clockBit: 'RCC_APB1ENR_TIM3EN',
+    irqName: 'TIM3_IRQn',
+    isrName: 'TIM3_IRQHandler',
+  },
+  {
+    name: 'TIM4',
+    apb: 1,
+    clockBit: 'RCC_APB1ENR_TIM4EN',
+    irqName: 'TIM4_IRQn',
+    isrName: 'TIM4_IRQHandler',
+  },
 ];
 
 // ─── EXTI mapping ─────────────────────────────────────────────────────────────
-// EXTICR[0]=EXTI0-3, [1]=EXTI4-7, [2]=EXTI8-11, [3]=EXTI12-15
 
 export function extiCrIndex(pinNum: number): number {
   return Math.floor(pinNum / 4);

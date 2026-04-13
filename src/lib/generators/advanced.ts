@@ -8,6 +8,7 @@ export interface PwmConfig {
   psc: number;
   arr: number;
   clockMhz: number;
+  pwmMode: 1 | 2; // 1 = HIGH while CNT < CCR (OCxM=110) | 2 = HIGH while CNT >= CCR (OCxM=111)
 }
 
 export function generatePwm(cfg: PwmConfig): string {
@@ -19,8 +20,14 @@ export function generatePwm(cfg: PwmConfig): string {
   const enrReg = m.apbBus === 1 ? 'APB1ENR' : 'APB2ENR';
   const fOut = (cfg.clockMhz * 1_000_000) / ((cfg.psc + 1) * (cfg.arr + 1));
 
+  const modeLabel =
+    cfg.pwmMode === 1
+      ? 'PWM Mode 1 (110): HIGH поки CNT < CCR, LOW коли CNT >= CCR'
+      : 'PWM Mode 2 (111): LOW поки CNT < CCR, HIGH коли CNT >= CCR';
+
   const lines: string[] = [];
-  lines.push('// RM0008: Section 15.3.9 PWM mode');
+  lines.push(`// RM0008: Section 15.3.9 PWM mode`);
+  lines.push(`// ${modeLabel}`);
   lines.push('');
   lines.push(`// 1. Тактування GPIO${p.port} + AFIO + ${m.timer}`);
   lines.push(`RCC->APB2ENR |= ${p.clockBit} | RCC_APB2ENR_AFIOEN;`);
@@ -34,20 +41,27 @@ export function generatePwm(cfg: PwmConfig): string {
   );
   lines.push('');
   lines.push(`// 3. Таймер ${m.timer}: prescaler і auto-reload`);
-  lines.push(`//    f_PWM = f_clk / ((PSC+1) * (ARR+1)) ≈ ${fOut.toFixed(1)} Гц`);
+  lines.push(`//    f_PWM = f_clk / ((PSC+1) * (ARR+1)) ~= ${fOut.toFixed(1)} Гц`);
   lines.push(`${m.timer}->PSC = ${cfg.psc};`);
   lines.push(`${m.timer}->ARR = ${cfg.arr};`);
   lines.push('');
-  lines.push(`// 4. PWM Mode 1 на каналі CH${m.channel} → регістр ${m.ccmrReg}`);
-  lines.push(`//    OCxM=110 (PWM mode 1): канал активний, поки CNT < CCR`);
+  lines.push(`// 4. ${modeLabel}`);
+  lines.push(`//    Регістр ${m.ccmrReg} керує каналом CH${m.channel}: очистити поле OCxM`);
   lines.push(`${m.timer}->${m.ccmrReg} &= ~TIM_${m.ccmrReg}_${m.ocmField};`);
-  lines.push(
-    `${m.timer}->${m.ccmrReg} |= TIM_${m.ccmrReg}_${m.ocmField}_1 | TIM_${m.ccmrReg}_${m.ocmField}_2; // 110`,
-  );
+
+  if (cfg.pwmMode === 1) {
+    lines.push(
+      `${m.timer}->${m.ccmrReg} |= TIM_${m.ccmrReg}_${m.ocmField}_1 | TIM_${m.ccmrReg}_${m.ocmField}_2; // OCxM=110 (Mode 1)`,
+    );
+  } else {
+    lines.push(
+      `${m.timer}->${m.ccmrReg} |= TIM_${m.ccmrReg}_${m.ocmField}_0 | TIM_${m.ccmrReg}_${m.ocmField}_1 | TIM_${m.ccmrReg}_${m.ocmField}_2; // OCxM=111 (Mode 2)`,
+    );
+  }
   lines.push(`${m.timer}->${m.ccmrReg} |= TIM_${m.ccmrReg}_${m.ocpeField};   // preload enable`);
   lines.push('');
   lines.push(
-    `// 5. Duty cycle: CCR${m.channel} / (ARR+1) = ${ccr} / ${cfg.arr + 1} ≈ ${cfg.dutyCyclePct}%`,
+    `// 5. Duty cycle: CCR${m.channel} / (ARR+1) = ${ccr} / ${cfg.arr + 1} ~= ${cfg.dutyCyclePct}%`,
   );
   lines.push(`${m.timer}->${m.ccrReg} = ${ccr};`);
   lines.push('');
@@ -57,7 +71,7 @@ export function generatePwm(cfg: PwmConfig): string {
   if (m.needsBDTR) {
     lines.push('');
     lines.push(`// 7. BDTR: потрібен ТІЛЬКИ для TIM1 (advanced timer)`);
-    lines.push(`//    MOE — Main Output Enable`);
+    lines.push(`//    MOE (Main Output Enable) — без нього вихід фізично заблокований`);
     lines.push(`${m.timer}->BDTR |= TIM_BDTR_MOE;`);
   }
 
@@ -82,7 +96,7 @@ export function generateUartRx(cfg: UartRxConfig): string {
   const entry = UART_RX_PINS.find((e) => e.pin === cfg.pin);
   if (!entry) return '// Невідомий UART RX пін';
 
-  const { usart, apb, clockBit, remap, irqName, usartNum } = entry;
+  const { usart, apb, clockBit, remap, remapMacro, remapComment, irqName } = entry;
   const p = parsePinInfo(cfg.pin);
   const clkHz = cfg.clockMhz * 1_000_000;
   const brr = Math.round(clkHz / cfg.baudrate);
@@ -95,18 +109,15 @@ export function generateUartRx(cfg: UartRxConfig): string {
   lines.push(`RCC->APB2ENR |= ${p.clockBit} | RCC_APB2ENR_AFIOEN;`);
   lines.push(`RCC->${enrReg} |= ${clockBit};`);
 
-  if (remap) {
+  if (remap && remapMacro) {
     lines.push('');
-    lines.push(`// 2. Remap ${usart}`);
-    if (usartNum === 1) {
-      lines.push(`AFIO->MAPR |= AFIO_MAPR_USART1_REMAP;   // RX→PB7`);
-    } else if (usartNum === 3) {
-      lines.push(`AFIO->MAPR |= AFIO_MAPR_USART3_REMAP_PARTIALREMAP;  // RX→PC11`);
-    }
+    lines.push(`// 2. Remap ${usart}: ${remapComment ?? ''}`);
+    lines.push(`AFIO->MAPR |= ${remapMacro};`);
   }
 
+  const step = remap ? 3 : 2;
   lines.push('');
-  lines.push(`// ${remap ? 3 : 2}. Налаштувати ${cfg.pin} як input pull-up`);
+  lines.push(`// ${step}. Налаштувати ${cfg.pin} як input pull-up`);
   lines.push(`//    UART RX: floating або pull-up. Pull-up рекомендовано — без нього`);
   lines.push(`//    лінія може "плавати" і давати хибні байти при відключеному TX.`);
   lines.push(`GPIO${p.port}->${p.regSuffix} &= ~(${modeMask(p)} | ${cnfMask(p)});`);
@@ -115,11 +126,11 @@ export function generateUartRx(cfg: UartRxConfig): string {
   );
   lines.push(`GPIO${p.port}->BSRR = GPIO_BSRR_BS${p.num};              // pull-UP (ODR=1)`);
   lines.push('');
-  lines.push(`// ${remap ? 4 : 3}. Baudrate`);
-  lines.push(`//    ${cfg.clockMhz} МГц / ${cfg.baudrate} bps = ${brr}`);
+  lines.push(`// ${step + 1}. Baudrate`);
+  lines.push(`//    ${cfg.clockMhz} MHz / ${cfg.baudrate} bps = ${brr}`);
   lines.push(`${usart}->BRR = ${clkHz} / ${cfg.baudrate};`);
   lines.push('');
-  lines.push(`// ${remap ? 5 : 4}. Увімкнути RX`);
+  lines.push(`// ${step + 2}. Увімкнути RX`);
   lines.push(`${usart}->CR1 |= USART_CR1_RE;   // Receiver Enable`);
 
   if (cfg.withInterrupt) {
@@ -155,24 +166,28 @@ export function generateTimerIrq(cfg: TimerIrqConfig): string {
   const info = TIMERS.find((t) => t.name === cfg.timer);
   if (!info) return '// Невідомий таймер';
 
-  const { apb, clockBit, irqName } = info;
+  const { apb, clockBit, irqName, isrName } = info;
   const enrReg = apb === 1 ? 'APB1ENR' : 'APB2ENR';
-  const num = cfg.timer.slice(3);
   const fOut = (cfg.clockMhz * 1_000_000) / ((cfg.psc + 1) * (cfg.arr + 1));
 
   const lines: string[] = [];
   lines.push('// RM0008: Section 15.4.4 TIMx_DIER (DMA/Interrupt Enable Register)');
   lines.push('');
-  lines.push(`// 1. Тактування ${cfg.timer}`);
+  lines.push(`// 1. Тактування ${cfg.timer} (шина APB${apb})`);
+  if (apb === 2) {
+    lines.push(`//    TIM1 — advanced-control timer на APB2.`);
+    lines.push(`//    Update interrupt = TIM1_UP_IRQn, ISR = TIM1_UP_IRQHandler`);
+    lines.push(`//    (не плутати з TIM1_IRQHandler — такого вектора немає!)`);
+  }
   lines.push(`RCC->${enrReg} |= ${clockBit};`);
   lines.push('');
   lines.push(`// 2. Налаштувати таймер (prescaler і ARR)`);
-  lines.push(`//    f_overflow ≈ ${fOut.toFixed(2)} Гц`);
+  lines.push(`//    f_overflow ~= ${fOut.toFixed(2)} Гц`);
   lines.push(`${cfg.timer}->PSC = ${cfg.psc};`);
   lines.push(`${cfg.timer}->ARR = ${cfg.arr};`);
   lines.push('');
   lines.push(`// 3. Увімкнути переривання при Update Event (UIE)`);
-  lines.push(`//    Update Event генерується при переповненні лічильника (CNT → ARR → 0)`);
+  lines.push(`//    Update Event = переповнення лічильника (CNT -> ARR -> 0)`);
   lines.push(`${cfg.timer}->DIER |= TIM_DIER_UIE;`);
   lines.push('');
   lines.push(`// 4. Увімкнути переривання в NVIC`);
@@ -182,7 +197,7 @@ export function generateTimerIrq(cfg: TimerIrqConfig): string {
   lines.push(`${cfg.timer}->CR1 |= TIM_CR1_CEN;`);
   lines.push('');
   lines.push(`// ISR — обробник переривання:`);
-  lines.push(`extern "C" void TIM${num}_IRQHandler() {`);
+  lines.push(`extern "C" void ${isrName}() {`);
   lines.push(`    if (${cfg.timer}->SR & TIM_SR_UIF) {`);
   lines.push(`        ${cfg.timer}->SR &= ~TIM_SR_UIF;   // скинути прапорець Update`);
   lines.push(`        // ваш код тут`);
@@ -205,7 +220,7 @@ export interface RccPllConfig {
 }
 
 export function generateRccPll(cfg: RccPllConfig): string {
-  const srcFreqMhz = cfg.source === 'HSE' ? 8 : 4; // HSI/2 = 4 MHz
+  const srcFreqMhz = cfg.source === 'HSE' ? 8 : 4;
   const sysclkMhz = srcFreqMhz * cfg.multiplier;
   const apb1Mhz = sysclkMhz / cfg.apb1Div;
 
@@ -220,7 +235,6 @@ export function generateRccPll(cfg: RccPllConfig): string {
     16: 'RCC_CFGR_PPRE1_DIV16',
   };
 
-  // Flash latency: 0WS ≤24 MHz, 1WS ≤48 MHz, 2WS ≤72 MHz
   const latency = sysclkMhz <= 24 ? 0 : sysclkMhz <= 48 ? 1 : 2;
   const latMacro = `FLASH_ACR_LATENCY_${latency}`;
 
@@ -238,27 +252,27 @@ export function generateRccPll(cfg: RccPllConfig): string {
 
   lines.push('');
   lines.push(`// 2. Flash: додати wait states для ${sysclkMhz} МГц`);
-  lines.push(`//    ≤24 МГц → 0WS, ≤48 МГц → 1WS, ≤72 МГц → 2WS`);
+  lines.push(`//    <=24 МГц -> 0WS, <=48 МГц -> 1WS, <=72 МГц -> 2WS`);
   if (latency > 0) {
     lines.push(`FLASH->ACR |= ${latMacro};`);
   } else {
-    lines.push(`FLASH->ACR &= ~FLASH_ACR_LATENCY; // 0 wait states (${sysclkMhz} МГц ≤ 24 МГц)`);
+    lines.push(`FLASH->ACR &= ~FLASH_ACR_LATENCY; // 0 wait states (${sysclkMhz} МГц <= 24 МГц)`);
   }
 
   lines.push('');
-  lines.push(`// 3. Налаштувати PLL: джерело = ${cfg.source}, множник = ×${cfg.multiplier}`);
-  lines.push(`//    SYSCLK = ${srcFreqMhz} МГц × ${cfg.multiplier} = ${sysclkMhz} МГц`);
+  lines.push(`// 3. Налаштувати PLL: джерело = ${cfg.source}, множник = x${cfg.multiplier}`);
+  lines.push(`//    SYSCLK = ${srcFreqMhz} МГц x ${cfg.multiplier} = ${sysclkMhz} МГц`);
   if (cfg.source === 'HSE') {
     lines.push(`RCC->CFGR |= RCC_CFGR_PLLSRC;          // HSE як джерело PLL`);
   } else {
-    lines.push(`// PLLSRC=0 (за замовчуванням) → HSI/2 як джерело PLL`);
+    lines.push(`// PLLSRC=0 (за замовчуванням) -> HSI/2 як джерело PLL`);
   }
   lines.push(`RCC->CFGR |= ${pllmullMacro};`);
 
   if (cfg.apb1Div > 1) {
     lines.push('');
     lines.push(
-      `// 4. APB1 divider: APB1 max 36 МГц → ${sysclkMhz} / ${cfg.apb1Div} = ${apb1Mhz} МГц`,
+      `// 4. APB1 divider: APB1 max 36 МГц -> ${sysclkMhz} / ${cfg.apb1Div} = ${apb1Mhz} МГц`,
     );
     lines.push(`RCC->CFGR |= ${apb1Macro[cfg.apb1Div]};`);
   }
@@ -270,7 +284,7 @@ export function generateRccPll(cfg: RccPllConfig): string {
   lines.push('');
   lines.push(`// ${cfg.apb1Div > 1 ? 6 : 5}. Переключити системну частоту на PLL`);
   lines.push(`RCC->CFGR &= ~RCC_CFGR_SW;              // очистити SW`);
-  lines.push(`RCC->CFGR |= RCC_CFGR_SW_PLL;           // SW=10 → PLL`);
+  lines.push(`RCC->CFGR |= RCC_CFGR_SW_PLL;           // SW=10 -> PLL`);
   lines.push(`while ((RCC->CFGR & RCC_CFGR_SWS) != RCC_CFGR_SWS_PLL) {} // чекати підтвердження`);
   lines.push('');
   lines.push(`// Результат: SYSCLK = ${sysclkMhz} МГц, APB1 = ${apb1Mhz} МГц`);

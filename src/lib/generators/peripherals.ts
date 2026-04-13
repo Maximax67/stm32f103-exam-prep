@@ -8,16 +8,17 @@ import {
   extiPortMacro,
   modeMask,
   parsePinInfo,
+  TIMERS,
   UART_TX_PINS,
 } from '../pinUtils';
 
 // ─── TIM: prescaler / ARR / enable ───────────────────────────────────────────
 
 export interface TimerSetupConfig {
-  timer: string; // 'TIM2', 'TIM3', ...
+  timer: string; // 'TIM1', 'TIM2', 'TIM3', ...
   psc: number;
   arr: number;
-  clockMhz: number; // APB timer clock in MHz (typically 8 or 72)
+  clockMhz: number;
 }
 
 export function generateTimerSetup(cfg: TimerSetupConfig): string {
@@ -34,6 +35,9 @@ export function generateTimerSetup(cfg: TimerSetupConfig): string {
   lines.push('// RM0008: Section 15.4 TIM registers');
   lines.push('');
   lines.push(`// 1. Тактування ${cfg.timer} на шині APB${apb}`);
+  if (apb === 2) {
+    lines.push(`//    TIM1 — advanced-control timer, на шині APB2 (разом з GPIO, USART1, ADC)`);
+  }
   lines.push(`RCC->${enrReg} |= ${clockBit};`);
   lines.push('');
   lines.push(`// 2. Prescaler: ділить clock перед лічильником`);
@@ -81,16 +85,11 @@ function adcSmpMacros(ch: number, smp: AdcSampleTime): string {
   const smprNum = adcSmprNum(ch);
   const bits = ADC_SMP_BITS[smp];
   const prefix = `ADC_SMPR${smprNum}_SMP${ch}`;
-
-  // Build OR expression from bits
   const parts: string[] = [];
   if (bits[0] === '1') parts.push(`${prefix}_2`);
   if (bits[1] === '1') parts.push(`${prefix}_1`);
   if (bits[2] === '1') parts.push(`${prefix}_0`);
-
-  if (parts.length === 0) {
-    return `/* SMP=000 — очищення вже достатньо */`;
-  }
+  if (parts.length === 0) return `/* SMP=000 — очищення вже достатньо */`;
   return parts.join(' | ');
 }
 
@@ -105,7 +104,6 @@ export function generateAdcSetup(cfg: AdcSetupConfig): string {
   const smprNum = adcSmprNum(ch);
   const smprReg = `SMPR${smprNum}`;
   const smprMask = `ADC_${smprReg}_SMP${ch}`;
-
   const p = parsePinInfo(cfg.pin);
 
   const lines: string[] = [];
@@ -156,12 +154,11 @@ export function generateUartTx(cfg: UartTxConfig): string {
   const entry = UART_TX_PINS.find((e) => e.pin === cfg.pin);
   if (!entry) return '// Невідомий UART TX пін';
 
-  const { usart, apb, clockBit, remap } = entry;
+  const { usart, apb, clockBit, remap, remapMacro, remapComment } = entry;
   const p = parsePinInfo(cfg.pin);
   const clkHz = cfg.clockMhz * 1_000_000;
   const brr = Math.round(clkHz / cfg.baudrate);
   const enrReg = apb === 1 ? 'APB1ENR' : 'APB2ENR';
-  const usartNum = entry.usartNum;
 
   const lines: string[] = [];
   lines.push('// RM0008: Section 27.6 USART registers');
@@ -170,29 +167,26 @@ export function generateUartTx(cfg: UartTxConfig): string {
   lines.push(`RCC->APB2ENR |= ${p.clockBit} | RCC_APB2ENR_AFIOEN;`);
   lines.push(`RCC->${enrReg} |= ${clockBit};`);
 
-  if (remap) {
+  if (remap && remapMacro) {
     lines.push('');
-    lines.push(`// 2. Remap ${usart}: увімкнути через AFIO_MAPR`);
-    if (usartNum === 1) {
-      lines.push(`AFIO->MAPR |= AFIO_MAPR_USART1_REMAP;   // TX→PB6, RX→PB7`);
-    } else if (usartNum === 3) {
-      lines.push(`AFIO->MAPR |= AFIO_MAPR_USART3_REMAP_PARTIALREMAP;  // TX→PC10, RX→PC11`);
-    }
+    lines.push(`// 2. Remap ${usart}: ${remapComment ?? ''}`);
+    lines.push(`AFIO->MAPR |= ${remapMacro};`);
   }
 
+  const step = remap ? 3 : 2;
   lines.push('');
-  lines.push(`// ${remap ? 3 : 2}. Налаштувати ${cfg.pin} як AF push-pull (MODE=11, CNF=10)`);
+  lines.push(`// ${step}. Налаштувати ${cfg.pin} як AF push-pull (MODE=11, CNF=10)`);
   lines.push(`//    TX — вихід, тому потрібен AF push-pull, швидкість 50 МГц`);
   lines.push(`GPIO${p.port}->${p.regSuffix} &= ~(${modeMask(p)} | ${cnfMask(p)});`);
   lines.push(
     `GPIO${p.port}->${p.regSuffix} |= ${modeMask(p, '_0')} | ${modeMask(p, '_1')} | ${cnfMask(p, '_1')};`,
   );
   lines.push('');
-  lines.push(`// ${remap ? 4 : 3}. Baudrate = PCLK${apb} / BRR`);
+  lines.push(`// ${step + 1}. Baudrate = PCLK${apb} / BRR`);
   lines.push(`//    ${cfg.clockMhz} МГц / ${cfg.baudrate} bps = ${brr}`);
   lines.push(`${usart}->BRR = ${clkHz} / ${cfg.baudrate};`);
   lines.push('');
-  lines.push(`// ${remap ? 5 : 4}. Увімкнути TX (TE) та сам USART (UE)`);
+  lines.push(`// ${step + 2}. Увімкнути TX (TE) та сам USART (UE)`);
   lines.push(`${usart}->CR1 |= USART_CR1_TE;   // Transmitter Enable`);
   lines.push(`${usart}->CR1 |= USART_CR1_UE;   // USART Enable`);
 
@@ -253,6 +247,59 @@ export function generateExti(cfg: ExtiConfig): string {
   lines.push(`extern "C" void ${irq.replace('_IRQn', 'Handler')}() {`);
   lines.push(`    if (EXTI->PR & EXTI_PR_PR${p.num}) {`);
   lines.push(`        EXTI->PR = EXTI_PR_PR${p.num};   // скинути прапорець (write 1 to clear)`);
+  lines.push(`    }`);
+  lines.push(`}`);
+
+  return lines.join('\n');
+}
+
+// ─── Timer IRQ ────────────────────────────────────────────────────────────────
+
+export interface TimerIrqConfig {
+  timer: string;
+  psc: number;
+  arr: number;
+  clockMhz: number;
+}
+
+export function generateTimerIrq(cfg: TimerIrqConfig): string {
+  const info = TIMERS.find((t) => t.name === cfg.timer);
+  if (!info) return '// Невідомий таймер';
+
+  const { apb, clockBit, irqName, isrName } = info;
+  const enrReg = apb === 1 ? 'APB1ENR' : 'APB2ENR';
+  const fOut = (cfg.clockMhz * 1_000_000) / ((cfg.psc + 1) * (cfg.arr + 1));
+
+  const lines: string[] = [];
+  lines.push('// RM0008: Section 15.4.4 TIMx_DIER (DMA/Interrupt Enable Register)');
+  lines.push('');
+  lines.push(`// 1. Тактування ${cfg.timer} (шина APB${apb})`);
+  if (apb === 2) {
+    lines.push(`//    TIM1 — advanced-control timer на APB2. Update IRQ = TIM1_UP_IRQn`);
+    lines.push(`//    (TIM1 має окремі вектори: TIM1_UP, TIM1_CC, TIM1_BRK, TIM1_TRG_COM)`);
+  }
+  lines.push(`RCC->${enrReg} |= ${clockBit};`);
+  lines.push('');
+  lines.push(`// 2. Налаштувати таймер (prescaler і ARR)`);
+  lines.push(`//    f_overflow ≈ ${fOut.toFixed(2)} Гц`);
+  lines.push(`${cfg.timer}->PSC = ${cfg.psc};`);
+  lines.push(`${cfg.timer}->ARR = ${cfg.arr};`);
+  lines.push('');
+  lines.push(`// 3. Увімкнути переривання при Update Event (UIE)`);
+  lines.push(`//    Update Event генерується при переповненні лічильника (CNT → ARR → 0)`);
+  lines.push(`${cfg.timer}->DIER |= TIM_DIER_UIE;`);
+  lines.push('');
+  lines.push(`// 4. Увімкнути переривання в NVIC`);
+  lines.push(`NVIC_EnableIRQ(${irqName});`);
+  lines.push('');
+  lines.push(`// 5. Запустити лічильник`);
+  lines.push(`${cfg.timer}->CR1 |= TIM_CR1_CEN;`);
+  lines.push('');
+  lines.push(`// ISR — обробник переривання:`);
+  lines.push(`extern "C" void ${isrName}() {`);
+  lines.push(`    if (${cfg.timer}->SR & TIM_SR_UIF) {`);
+  lines.push(`        ${cfg.timer}->SR &= ~TIM_SR_UIF;   // скинути прапорець Update`);
+  lines.push(`        // ваш код тут`);
   lines.push(`    }`);
   lines.push(`}`);
 
